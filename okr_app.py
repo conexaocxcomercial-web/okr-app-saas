@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine, Column, String, Float, ForeignKey, text
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
+from sqlalchemy import create_engine, Column, String, Float, text
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from nicegui import ui, app
 import plotly.express as px
 from io import BytesIO
@@ -46,10 +46,6 @@ class UserDB(Base):
     cliente = Column(String)
 
 class OKRDataDB(Base):
-    """
-    Mantendo a estrutura de tabela flat para compatibilidade e simplicidade de import/export,
-    mas usando ORM para manipulação.
-    """
     __tablename__ = 'okr_data'
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
     cliente = Column(String, index=True)
@@ -93,7 +89,6 @@ class DatabaseManager:
             return pd.read_sql(text("SELECT * FROM okr_data WHERE cliente = :c"), conn, params={'c': client})
 
     def sync_data(self, df: pd.DataFrame, client: str):
-        """Sincronização inteligente: deleta apenas os dados do cliente e insere os novos"""
         with self.get_session() as session:
             session.query(OKRDataDB).filter_by(cliente=client).delete()
             if not df.empty:
@@ -141,7 +136,6 @@ class Objective:
         return sum(k.progress for k in self.krs) / len(self.krs)
 
 class OKRState:
-    """Gerenciador de Estado da Sessão"""
     def __init__(self, user_info: Dict):
         self.user = user_info
         self.objectives: List[Objective] = []
@@ -167,7 +161,6 @@ class OKRState:
         df = df.fillna('')
         objs_dict = {}
         
-        # Agrupamento lógico para reconstruir a hierarquia
         for _, row in df.iterrows():
             obj_key = (row['departamento'], row['objetivo'])
             if obj_key not in objs_dict:
@@ -218,7 +211,7 @@ class OKRState:
         depts = sorted(list(set(o.department for o in self.objectives)))
         return depts if depts else ["Geral"]
 
-# --- 4. COMPONENTES DE UI CUSTOMIZADOS ---
+# --- 4. COMPONENTES DE UI ---
 
 class UIComponents:
     @staticmethod
@@ -231,12 +224,7 @@ class UIComponents:
     def card_container():
         return ui.card().classes('w-full shadow-sm border border-slate-200 rounded-lg p-4 bg-white')
 
-    @staticmethod
-    def status_badge(status: str):
-        config = STATUS_CONFIG.get(status, STATUS_CONFIG["Não Iniciado"])
-        return ui.badge(status, color=config["color"]).classes('px-2 py-1 text-xs font-medium uppercase tracking-wider')
-
-# --- 5. VIEWS E TELAS ---
+# --- 5. VIEWS ---
 
 @ui.page('/login')
 def login_page():
@@ -276,6 +264,12 @@ def login_page():
                 with ui.tab_panel('Login'):
                     username = ui.input('Usuário').classes('w-full').props('outlined dense')
                     password = ui.input('Senha', password=True).classes('w-full mt-4').props('outlined dense')
+                    # Adiciona "olhinho" na senha
+                    with password.add_slot('append'):
+                        ui.icon('visibility').on('click', lambda: password.props(
+                            'type=text' if 'password' in password.props else 'type=password'
+                        )).classes('cursor-pointer')
+                    
                     ui.button('Entrar', on_click=handle_login).classes('w-full mt-8 h-12 bg-blue-600 text-white font-bold rounded-lg')
                 
                 with ui.tab_panel('Cadastro'):
@@ -283,6 +277,11 @@ def login_page():
                     reg_client = ui.input('Empresa/Cliente').classes('w-full mt-2').props('outlined dense')
                     reg_user = ui.input('Usuário').classes('w-full mt-2').props('outlined dense')
                     reg_pass = ui.input('Senha', password=True).classes('w-full mt-2').props('outlined dense')
+                    with reg_pass.add_slot('append'):
+                        ui.icon('visibility').on('click', lambda: reg_pass.props(
+                            'type=text' if 'password' in reg_pass.props else 'type=password'
+                        )).classes('cursor-pointer')
+
                     ui.button('Criar Conta', on_click=handle_register).classes('w-full mt-8 h-12 bg-emerald-600 text-white font-bold rounded-lg')
 
 @ui.refreshable
@@ -340,7 +339,8 @@ def render_management(state: OKRState):
                             ui.label(f"{prog*100:.0f}%").classes('font-black text-blue-600 text-xl')
                             with ui.button(icon='more_vert').props('flat round'):
                                 with ui.menu():
-                                    ui.menu_item('Excluir Objetivo', on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())).classes('text-red-500')
+                                    with ui.menu_item(on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())):
+                                        ui.label('Excluir Objetivo').classes('text-red-500')
                         
                         ui.linear_progress(value=prog).classes('h-2 rounded-full mt-2').props('color=blue shadow-sm')
                         
@@ -361,7 +361,7 @@ def render_management(state: OKRState):
                                             ui.number('Atual').bind_value(kr, 'current').on('blur', state.mark_dirty).classes('w-24').props('outlined dense')
                                             ui.number('Meta').bind_value(kr, 'target').on('blur', state.mark_dirty).classes('w-24').props('outlined dense')
                                             ui.button(icon='delete', on_click=lambda k=kr, o=obj: (o.krs.remove(k), state.mark_dirty(), render_management.refresh())).props('flat round color=red')
-                                        
+                                    
                                         # Tarefas dentro do KR
                                         ui.separator()
                                         ui.label('Plano de Ação').classes('text-xs font-bold text-slate-400 uppercase tracking-widest')
@@ -378,7 +378,7 @@ def render_management(state: OKRState):
                                                         ui.date().bind_value(d).on_value_change(lambda: (date_menu.close(), state.mark_dirty()))
                                                 
                                                 ui.button(icon='close', on_click=lambda t=task, k=kr: (k.tasks.remove(t), state.mark_dirty(), render_management.refresh())).props('flat round dense size=sm color=red')
-                                        
+                                    
                                         ui.button('Nova Tarefa', icon='add', on_click=lambda k=kr: (k.tasks.append(Task()), render_management.refresh())).props('flat color=blue size=sm')
 
                             ui.button('Adicionar Key Result', icon='add_circle_outline', on_click=lambda o=obj: (o.krs.append(KeyResult(name="Novo KR")), render_management.refresh())).props('flat color=blue classes="mt-2"')
@@ -419,7 +419,7 @@ def render_dashboard(state: OKRState):
         with ui.card().classes('flex-grow p-4 h-96'):
             ui.label('Distribuição de Status').classes('font-bold mb-4')
             fig = px.pie(df_krs, names='status', color='status', 
-                        color_discrete_map={k: v['color'] for k, v in STATUS_CONFIG.items()})
+                         color_discrete_map={k: v['color'] for k, v in STATUS_CONFIG.items()})
             fig.update_layout(margin=dict(t=0, b=0, l=0, r=0))
             ui.plotly(fig).classes('w-full h-full')
             
@@ -462,16 +462,22 @@ def main_page():
             
             with ui.avatar(color='blue-600', text_color='white'):
                 ui.label(user_info['name'][0].upper())
+            
+            # --- FIX: Correção do Ícone no Menu ---
             with ui.button(icon='expand_more').props('flat round'):
                 with ui.menu():
-                    ui.menu_item('Sair', on_click=lambda: (app.storage.user.clear(), ui.navigate.to('/login')), icon='logout')
+                    with ui.menu_item(on_click=lambda: (app.storage.user.clear(), ui.navigate.to('/login'))):
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('logout')
+                            ui.label('Sair')
 
     with ui.left_drawer().classes('bg-slate-50 border-r border-slate-200 p-0') as drawer:
         with ui.column().classes('w-full gap-0'):
             def navigate_to(view_func):
                 content.clear()
                 with content: view_func(state)
-                drawer.close()
+                if ui.query('body').classes('w-full').width < 1024: 
+                    drawer.close()
 
             ui.label('MENU PRINCIPAL').classes('text-[10px] font-bold text-slate-400 px-6 py-4 tracking-widest')
             
