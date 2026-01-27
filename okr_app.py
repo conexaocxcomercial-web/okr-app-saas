@@ -7,21 +7,19 @@ from sqlalchemy import create_engine, text
 from nicegui import ui
 
 # --- 1. CONFIGURAÇÃO DE AMBIENTE ---
-# Pega a URL do Render. Se não existir, cria um SQLite local.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///okr_local.db")
 
-# Correção obrigatória para o Render (Postgres)
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# --- 2. MODELOS DE DOMÍNIO (Lógica) ---
+# --- 2. MODELOS DE DOMÍNIO ---
 @dataclass
 class Task:
     id: str = field(default_factory=lambda: str(uuid4()))
     description: str = ""
     status: str = "Não Iniciado"
     responsible: str = ""
-    deadline: Optional[str] = None # Formato YYYY-MM-DD
+    deadline: Optional[str] = None 
     _callback: Optional[callable] = None
 
     def mark_dirty(self):
@@ -75,14 +73,13 @@ class Objective:
     def notify(self):
         if self._app_callback: self._app_callback()
 
-# --- 3. PERSISTÊNCIA (Banco de Dados) ---
+# --- 3. PERSISTÊNCIA ---
 class Persistence:
     def __init__(self, db_url):
         self.engine = create_engine(db_url)
         self._init_tables()
 
     def _init_tables(self):
-        # Cria tabela se não existir
         with self.engine.begin() as conn:
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS okrs (
@@ -97,17 +94,16 @@ class Persistence:
             with self.engine.connect() as conn:
                 return pd.read_sql("SELECT * FROM okrs", conn)
         except Exception as e:
-            print(f"Erro ao ler banco: {e}")
+            print(f"Erro crítico: {e}")
             return pd.DataFrame()
 
     def save(self, df: pd.DataFrame):
         with self.engine.begin() as conn:
-            # Estratégia simples: Limpa e reescreve (ideal para MVP)
             conn.execute(text("DELETE FROM okrs")) 
             if not df.empty:
                 df.to_sql('okrs', conn, if_exists='append', index=False)
 
-# --- 4. GERENCIADOR DE ESTADO (Mapper + State) ---
+# --- 4. GERENCIADOR DE ESTADO ---
 class AppState:
     def __init__(self):
         self.db = Persistence(DATABASE_URL)
@@ -121,10 +117,15 @@ class AppState:
         self.dirty = False
 
     def save_data(self):
-        df = self._domain_to_df(self.objectives)
-        self.db.save(df)
-        self.dirty = False
-        ui.notify("Dados salvos com sucesso!", type='positive')
+        if not self.dirty: return
+        ui.notify("Salvando...", type='info')
+        try:
+            df = self._domain_to_df(self.objectives)
+            self.db.save(df)
+            self.dirty = False
+            ui.notify("Salvo!", type='positive')
+        except Exception as e:
+            ui.notify(f"Erro: {e}", type='negative')
 
     @property
     def dirty(self):
@@ -140,7 +141,6 @@ class AppState:
     def mark_dirty(self):
         if not self.dirty: self.dirty = True
 
-    # --- Mappers Internos ---
     def _df_to_domain(self, df: pd.DataFrame) -> List[Objective]:
         objs_map = {}
         if df.empty: return []
@@ -181,13 +181,12 @@ class AppState:
 state = AppState()
 state.load_data()
 
-# --- 5. INTERFACE DO USUÁRIO (UI) ---
+# --- 5. UI (Interface) ---
 
 def render_task(task: Task, kr: KeyResult, refresh_ui):
     with ui.row().classes('w-full items-center gap-2 p-2 border-b border-gray-100 hover:bg-gray-50'):
-        ui.input(value=task.description).bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('dense placeholder="Descrição da tarefa"')
+        ui.input(value=task.description).bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('dense placeholder="Tarefa"')
         
-        # Status com cores
         def update_color(e):
             state.mark_dirty()
             e.sender.classes(remove='text-red-500 text-green-500 text-yellow-500')
@@ -196,7 +195,6 @@ def render_task(task: Task, kr: KeyResult, refresh_ui):
 
         opts = ['Não Iniciado', 'Em Andamento', 'Pausado', 'Concluído']
         s = ui.select(opts, value=task.status).bind_value(task, 'status').on_value_change(update_color).classes('w-36 font-bold').props('dense options-dense')
-        # Seta cor inicial
         if task.status == 'Concluído': s.classes('text-green-500')
         elif task.status == 'Não Iniciado': s.classes('text-red-500')
         else: s.classes('text-yellow-500')
@@ -211,17 +209,11 @@ def render_task(task: Task, kr: KeyResult, refresh_ui):
 
         ui.button(icon='delete', color='red', on_click=lambda: (kr.remove_task(task), refresh_ui())).props('flat dense round')
 
-@ui.refreshable
-def main_layout():
-    with ui.header().classes('bg-white text-gray-800 shadow-sm p-4 items-center justify-between'):
-        ui.label('OKR Manager SaaS').classes('text-xl font-bold')
-        with ui.row():
-            state.btn_save_ref = ui.button('Salvar', on_click=state.save_data, icon='cloud_upload').props('color=green')
-            state.btn_save_ref.visible = state.dirty
-            ui.button(icon='refresh', on_click=lambda: (state.load_data(), main_layout.refresh())).props('flat round')
-            ui.button(icon='add', on_click=open_new_obj).props('outline round color=blue')
+# --- AQUI ESTAVA O ERRO: Separamos o Header do Conteúdo ---
 
-    # Conteúdo Principal
+@ui.refreshable
+def render_content():
+    """Esta função só renderiza o conteúdo que muda (abas, cards, listas)"""
     depts = sorted(list(set(o.department for o in state.objectives))) or ["Geral"]
     
     with ui.column().classes('w-full max-w-6xl mx-auto p-4'):
@@ -232,7 +224,7 @@ def main_layout():
             for dept in depts:
                 with ui.tab_panel(dept):
                     objs = [o for o in state.objectives if o.department == dept]
-                    if not objs: ui.label("Sem objetivos aqui.").classes('text-gray-400 italic')
+                    if not objs: ui.label("Vazio por enquanto.").classes('text-gray-400 italic')
                     
                     for obj in objs:
                         with ui.card().classes('w-full mb-4 border-l-4 border-blue-500'):
@@ -246,14 +238,14 @@ def main_layout():
                                 with ui.expansion(text=kr.name, icon='ads_click').classes('w-full bg-slate-50 mb-2 border rounded').bind_text_from(kr, 'name', lambda x: f"KR: {x} ({kr.progress_pct*100:.0f}%)"):
                                     with ui.column().classes('w-full p-2 bg-white'):
                                         with ui.row().classes('gap-4 mb-2'):
-                                            ui.input("Nome KR").bind_value(kr, 'name').on('blur', state.mark_dirty).classes('flex-grow').props('dense')
+                                            ui.input("KR").bind_value(kr, 'name').on('blur', state.mark_dirty).classes('flex-grow').props('dense')
                                             ui.number("Atual", step=1).bind_value(kr, 'current').on('blur', state.mark_dirty).classes('w-24').props('dense')
                                             ui.number("Meta", step=1).bind_value(kr, 'target').on('blur', state.mark_dirty).classes('w-24').props('dense')
                                         
-                                        for t in kr.tasks: render_task(t, kr, main_layout.refresh)
-                                        ui.button("Nova Tarefa", icon='add', on_click=lambda k=kr: (k.add_task(Task()), main_layout.refresh())).props('flat dense size=sm')
+                                        for t in kr.tasks: render_task(t, kr, render_content.refresh)
+                                        ui.button("Nova Tarefa", icon='add', on_click=lambda k=kr: (k.add_task(Task()), render_content.refresh())).props('flat dense size=sm')
 
-                            ui.button("Novo KR", icon='add_circle_outline', on_click=lambda o=obj: (o.add_kr(KeyResult("Novo KR")), main_layout.refresh())).props('flat color=blue')
+                            ui.button("Novo KR", icon='add_circle_outline', on_click=lambda o=obj: (o.add_kr(KeyResult("Novo KR")), render_content.refresh())).props('flat color=blue')
 
 def open_new_obj():
     with ui.dialog() as d, ui.card():
@@ -264,19 +256,37 @@ def open_new_obj():
             if dept.value and nome.value:
                 state.objectives.append(Objective(department=dept.value, name=nome.value, _app_callback=state.mark_dirty))
                 state.mark_dirty()
-                main_layout.refresh()
+                render_content.refresh() # Atualiza o conteúdo
                 d.close()
         ui.button('Criar', on_click=save)
     d.open()
 
-main_layout()
+def setup_ui():
+    """Esta função monta o layout fixo (Header) e chama o conteúdo dinâmico"""
+    
+    # Header Fixo (Fora do Refreshable)
+    with ui.header().classes('bg-white text-gray-800 shadow-sm p-4 items-center justify-between'):
+        ui.label('OKR SaaS').classes('text-xl font-bold')
+        with ui.row():
+            state.btn_save_ref = ui.button('Salvar', on_click=state.save_data, icon='cloud_upload').props('color=green')
+            state.btn_save_ref.visible = state.dirty
+            
+            # Note que agora chamamos render_content.refresh()
+            ui.button(icon='refresh', on_click=lambda: (state.load_data(), render_content.refresh())).props('flat round')
+            ui.button(icon='add', on_click=open_new_obj).props('outline round color=blue')
 
-# --- 6. STARTUP SERVER (Render Config) ---
+    # Chama o conteúdo dinâmico
+    render_content()
+
+# Inicializa a UI
+setup_ui()
+
+# --- 6. STARTUP ---
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
         title="OKR App",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8080)),
-        storage_secret="chave-secreta-aleatoria-123",
+        storage_secret="chave-secreta-do-app",
         language="pt-BR"
     )
