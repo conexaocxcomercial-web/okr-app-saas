@@ -12,24 +12,27 @@ from nicegui import ui, app
 import plotly.express as px
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO E DESIGN SYSTEM ---
+# --- 1. CONFIGURAÇÃO E DESIGN SYSTEM (BRANDING) ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///okr_saas.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-THEME = {
-    "primary": "#3b82f6",    # Blue 500
-    "secondary": "#64748b",  # Slate 500
-    "positive": "#10b981",   # Emerald 500
-    "negative": "#ef4444",   # Red 500
-    "warning": "#f59e0b",    # Amber 500
+# Paleta da Empresa
+BRAND = {
+    "primary": "#7371ff",    # Roxo/Azul Vibrante
+    "secondary": "#ff43c0",  # Rosa Choque
+    "lime": "#bef533",       # Verde Lima
+    "lavender": "#dbbfff",   # Lilás Claro
+    "dark": "#1e1e1e",       # Preto Suave
+    "gray_light": "#f3f4f6"  # Cinza neutro para fundos
 }
 
+# Configuração de Cores para Gráficos e Status
 STATUS_CONFIG = {
-    "Não Iniciado": {"color": THEME["negative"], "icon": "radio_button_unchecked"},
-    "Em Andamento": {"color": THEME["primary"], "icon": "sync"},
-    "Pausado": {"color": THEME["warning"], "icon": "pause_circle"},
-    "Concluído": {"color": THEME["positive"], "icon": "check_circle"}
+    "Não Iniciado": {"color": "#ef4444", "icon": "radio_button_unchecked"}, # Vermelho
+    "Em Andamento": {"color": BRAND["primary"], "icon": "sync"},
+    "Pausado": {"color": "#f59e0b", "icon": "pause_circle"}, # Laranja
+    "Concluído": {"color": BRAND["lime"], "text_color": "black", "icon": "check_circle"} # Lima com texto preto
 }
 
 # --- 2. PERSISTÊNCIA (SQLAlchemy ORM) ---
@@ -56,7 +59,7 @@ class OKRDataDB(Base):
     # Métricas KR
     avanco = Column(Float)
     alvo = Column(Float)
-    # Novas Métricas Tarefa
+    # Métricas Tarefa (Plano de Ação)
     tarefa_avanco = Column(Float, default=0.0)
     tarefa_alvo = Column(Float, default=1.0)
 
@@ -99,7 +102,7 @@ class DatabaseManager:
 
 db_manager = DatabaseManager(DATABASE_URL)
 
-# --- 3. DOMÍNIO E ESTADO REATIVO ---
+# --- 3. DOMÍNIO ---
 
 @dataclass
 class Task:
@@ -108,9 +111,13 @@ class Task:
     status: str = "Não Iniciado"
     responsible: str = ""
     deadline: Optional[str] = None
-    # Novas métricas de tarefa
     current: float = 0.0
     target: float = 1.0
+
+    @property
+    def progress(self) -> float:
+        if self.target == 0: return 1.0 if self.current >= 0 else 0.0
+        return min(max(self.current / self.target, 0.0), 1.0)
 
 @dataclass
 class KeyResult:
@@ -158,10 +165,9 @@ class OKRState:
         df = self.to_dataframe()
         db_manager.sync_data(df, self.user['cliente'])
         self.is_dirty = False
-        ui.notify("Salvo com sucesso!", type="positive")
+        ui.notify("Dados salvos com segurança!", type="positive", color=BRAND['lime'], text_color=BRAND['dark'])
 
     def rename_department(self, old_name: str, new_name: str):
-        """Renomeia departamento em todos os objetivos"""
         if not new_name: return
         changed = False
         for obj in self.objectives:
@@ -171,7 +177,6 @@ class OKRState:
         if changed: self.mark_dirty()
 
     def delete_department(self, dept_name: str):
-        """Exclui todos os objetivos de um departamento"""
         initial_len = len(self.objectives)
         self.objectives = [obj for obj in self.objectives if obj.department != dept_name]
         if len(self.objectives) < initial_len:
@@ -192,16 +197,12 @@ class OKRState:
             
             kr = next((k for k in obj.krs if k.name == row['kr']), None)
             if not kr:
-                kr = KeyResult(name=row['kr'], 
-                             target=float(row['alvo'] or 1.0), 
-                             current=float(row['avanco'] or 0.0))
+                kr = KeyResult(name=row['kr'], target=float(row['alvo'] or 1.0), current=float(row['avanco'] or 0.0))
                 obj.krs.append(kr)
             
             if row['tarefa']:
-                # Tenta pegar as colunas novas, se não existirem (banco antigo), usa padrão
                 t_curr = float(row.get('tarefa_avanco', 0.0) or 0.0)
                 t_targ = float(row.get('tarefa_alvo', 1.0) or 1.0)
-                
                 task = Task(description=row['tarefa'], status=row['status'], 
                            responsible=row['responsavel'], deadline=str(row['prazo']),
                            current=t_curr, target=t_targ)
@@ -241,14 +242,14 @@ class OKRState:
         depts = sorted(list(set(o.department for o in self.objectives)))
         return depts if depts else ["Geral"]
 
-# --- 4. COMPONENTES DE UI ---
+# --- 4. COMPONENTES UI (DESIGN SYSTEM) ---
 
 class UIComponents:
     @staticmethod
     def section_title(title: str, icon: str = None):
         with ui.row().classes('items-center gap-2 mb-4'):
-            if icon: ui.icon(icon).classes('text-2xl text-blue-600')
-            ui.label(title).classes('text-xl font-bold text-slate-800')
+            if icon: ui.icon(icon).classes('text-2xl').props(f'color={BRAND["primary"]}')
+            ui.label(title).classes('text-xl font-bold').style(f'color: {BRAND["dark"]}')
 
     @staticmethod
     def card_container():
@@ -268,24 +269,25 @@ def login_page():
             app.storage.user.update({'authenticated': True, 'user_info': user})
             ui.navigate.to('/')
         else:
-            ui.notify("Credenciais inválidas", type="negative")
+            ui.notify("Login falhou", type="negative")
 
     async def handle_register():
         if not all([reg_user.value, reg_pass.value, reg_name.value, reg_client.value]):
-            ui.notify("Preencha todos os campos", type="warning")
+            ui.notify("Preencha tudo", type="warning")
             return
         success, msg = db_manager.create_user(reg_user.value, reg_pass.value, reg_name.value, reg_client.value)
         if success:
-            ui.notify(msg, type="positive")
+            ui.notify(msg, type="positive", color=BRAND['lime'], text_color='black')
             tabs.value = 'Login'
         else:
             ui.notify(msg, type="negative")
 
     with ui.column().classes('absolute-center w-full max-w-md p-4'):
-        with ui.card().classes('w-full shadow-2xl p-8 border-t-4 border-blue-600'):
-            ui.label('OKR SaaS').classes('text-3xl font-black text-center text-blue-600 mb-2')
+        # Card de Login estilizado com a marca
+        with ui.card().classes('w-full shadow-2xl p-8 border-t-4').style(f'border-top-color: {BRAND["primary"]}'):
+            ui.label('OKR SaaS').classes('text-3xl font-black text-center mb-2').style(f'color: {BRAND["primary"]}')
             
-            with ui.tabs().classes('w-full') as tabs:
+            with ui.tabs().classes('w-full').props(f'active-color={BRAND["secondary"]} indicator-color={BRAND["secondary"]}') as tabs:
                 ui.tab('Login', icon='login')
                 ui.tab('Cadastro', icon='person_add')
             
@@ -297,32 +299,32 @@ def login_page():
                         ui.icon('visibility').on('click', lambda: password.props(
                             'type=text' if 'password' in password.props else 'type=password'
                         )).classes('cursor-pointer')
-                    ui.button('Entrar', on_click=handle_login).classes('w-full mt-8 h-12 bg-blue-600 text-white font-bold rounded-lg')
+                    ui.button('Entrar', on_click=handle_login).classes('w-full mt-8 font-bold text-white').style(f'background-color: {BRAND["primary"]}')
                 
                 with ui.tab_panel('Cadastro'):
-                    reg_name = ui.input('Nome Completo').classes('w-full').props('outlined dense')
-                    reg_client = ui.input('Empresa/Cliente').classes('w-full mt-2').props('outlined dense')
+                    reg_name = ui.input('Nome').classes('w-full').props('outlined dense')
+                    reg_client = ui.input('Empresa').classes('w-full mt-2').props('outlined dense')
                     reg_user = ui.input('Usuário').classes('w-full mt-2').props('outlined dense')
                     reg_pass = ui.input('Senha', password=True).classes('w-full mt-2').props('outlined dense')
                     with reg_pass.add_slot('append'):
                         ui.icon('visibility').on('click', lambda: reg_pass.props(
                             'type=text' if 'password' in reg_pass.props else 'type=password'
                         )).classes('cursor-pointer')
-                    ui.button('Criar Conta', on_click=handle_register).classes('w-full mt-8 h-12 bg-emerald-600 text-white font-bold rounded-lg')
+                    ui.button('Criar Conta', on_click=handle_register).classes('w-full mt-8 font-bold text-black').style(f'background-color: {BRAND["lime"]}')
 
 @ui.refreshable
 def render_management(state: OKRState):
     depts = state.get_departments()
     
     with ui.row().classes('w-full justify-between items-center mb-6'):
-        UIComponents.section_title("Painel de Gestão", "assignment")
+        UIComponents.section_title("Gestão Estratégica", "assignment")
         with ui.row().classes('gap-2'):
-            ui.button('Novo Objetivo', icon='add', on_click=lambda: add_obj_dialog.open()).props('rounded elevated color=blue')
-            ui.button('Departamentos', icon='edit', on_click=lambda: dept_dialog.open()).props('flat color=slate')
+            ui.button('Novo Objetivo', icon='add', on_click=lambda: add_obj_dialog.open()).props('rounded elevated').style(f'background-color: {BRAND["primary"]}; color: white')
+            ui.button('Departamentos', icon='edit', on_click=lambda: dept_dialog.open()).props('flat').style(f'color: {BRAND["secondary"]}')
 
-    # Dialog para Novo Objetivo
+    # Dialogs (Mantidos, apenas estilizados)
     with ui.dialog() as add_obj_dialog, ui.card().classes('w-96'):
-        ui.label('Novo Objetivo').classes('text-lg font-bold mb-4')
+        ui.label('Novo Objetivo').classes('text-lg font-bold mb-4').style(f'color: {BRAND["dark"]}')
         d_sel = ui.select(depts, label="Departamento", value=depts[0]).classes('w-full')
         o_name = ui.input("Título").classes('w-full')
         with ui.row().classes('w-full justify-end mt-4'):
@@ -332,122 +334,107 @@ def render_management(state: OKRState):
                     state.add_objective(d_sel.value, o_name.value)
                     add_obj_dialog.close()
                     render_management.refresh()
-            ui.button('Criar', on_click=confirm_add).props('elevated color=blue')
+            ui.button('Criar', on_click=confirm_add).props('elevated').style(f'background-color: {BRAND["primary"]}; color: white')
 
-    # Dialog Avançado de Gestão de Departamentos
+    # Dialog Avançado Departamentos
     with ui.dialog() as dept_dialog, ui.card().classes('w-[500px] h-[400px] p-0'):
         with ui.column().classes('w-full h-full'):
             ui.label('Gerenciar Departamentos').classes('text-lg font-bold p-4 border-b w-full')
-            
-            # Lista Rolável
             with ui.scroll_area().classes('flex-grow w-full p-4'):
-                if not depts: ui.label('Nenhum departamento.').classes('text-slate-400')
-                
+                if not depts: ui.label('Vazio').classes('text-slate-400')
                 for d in depts:
                     with ui.row().classes('w-full items-center justify-between mb-2 group hover:bg-gray-50 p-2 rounded'):
-                        # Input para renomear
-                        d_input = ui.input(value=d).props('dense borderless').classes('font-medium text-slate-700 flex-grow')
-                        
+                        d_input = ui.input(value=d).props('dense borderless').classes('font-medium flex-grow')
                         def handle_rename(new_val, old_val=d):
                             if new_val and new_val != old_val:
                                 state.rename_department(old_val, new_val)
                                 dept_dialog.close()
                                 render_management.refresh()
-                                ui.notify(f"Renomeado para {new_val}", type='positive')
-                        
                         d_input.on('blur', lambda e, i=d_input: handle_rename(i.value))
-                        
-                        # Botão Excluir
                         ui.button(icon='delete', on_click=lambda d=d: (state.delete_department(d), dept_dialog.close(), render_management.refresh())).props('flat dense round color=red')
-
-            # Footer Criar
             with ui.row().classes('w-full p-4 border-t gap-2 items-center bg-gray-50'):
-                new_d_input = ui.input(placeholder='Novo Departamento...').classes('flex-grow').props('outlined dense bg-white')
+                new_d_input = ui.input(placeholder='Novo...').classes('flex-grow').props('outlined dense bg-white')
                 def create_d():
                     if new_d_input.value:
                         state.add_objective(new_d_input.value, "Objetivo Inicial")
                         dept_dialog.close()
                         render_management.refresh()
-                ui.button('Adicionar', icon='add', on_click=create_d).props('elevated color=blue')
+                ui.button('Adicionar', icon='add', on_click=create_d).style(f'background-color: {BRAND["primary"]}; color: white')
 
     # ABAS
-    with ui.tabs().classes('w-full border-b border-slate-200') as tabs:
+    with ui.tabs().classes('w-full border-b border-slate-200').props(f'active-color={BRAND["primary"]} indicator-color={BRAND["primary"]}') as tabs:
         for d in depts: ui.tab(d)
 
     with ui.tab_panels(tabs, value=depts[0]).classes('w-full bg-transparent mt-4'):
         for dept in depts:
             with ui.tab_panel(dept):
                 objs = [o for o in state.objectives if o.department == dept]
-                if not objs:
-                    ui.label("Sem objetivos neste departamento.").classes('text-slate-400 italic py-8 text-center w-full')
+                if not objs: ui.label("Sem objetivos.").classes('text-slate-400 italic py-8 text-center w-full')
                 
                 for obj in objs:
                     with UIComponents.card_container().classes('mb-6'):
-                        # Header Objetivo
+                        # Objetivo
                         with ui.row().classes('w-full items-center gap-4'):
                             ui.input().bind_value(obj, 'name').on('blur', state.mark_dirty).classes('text-lg font-bold flex-grow').props('borderless dense')
                             
-                            # Knob de Progresso do Objetivo (Reativo)
-                            knob = ui.knob(obj.progress, show_value=False, size='32px', track_color='grey-3').props('readonly color=blue')
-                            knob.bind_value_from(obj, 'progress') # Garante atualização visual
-                            
-                            ui.label().bind_text_from(obj, 'progress', lambda p: f"{p*100:.0f}%").classes('font-black text-blue-600 text-xl')
+                            # Knob Progresso
+                            ui.knob(obj.progress, show_value=False, size='32px', track_color='grey-3').props(f'readonly color={BRAND["primary"]}')
+                            ui.label().bind_text_from(obj, 'progress', lambda p: f"{p*100:.0f}%").classes('font-black text-xl').style(f'color: {BRAND["primary"]}')
                             
                             with ui.button(icon='more_vert').props('flat round'):
                                 with ui.menu():
                                     with ui.menu_item(on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())):
-                                        ui.label('Excluir Objetivo').classes('text-red-500')
+                                        ui.label('Excluir').classes('text-red-500')
                         
-                        # Lista KRs
+                        ui.linear_progress(value=obj.progress).classes('h-2 rounded-full mt-2').props(f'color={BRAND["primary"]}')
+                        
+                        # KRs
                         with ui.column().classes('w-full mt-4 gap-2'):
                             for kr in obj.krs:
-                                with ui.expansion().classes('w-full border border-slate-100 rounded bg-slate-50') as exp:
+                                with ui.expansion().classes('w-full border border-slate-100 rounded').style(f'background-color: {BRAND["gray_light"]}') as exp:
                                     exp.bind_value(kr, 'expanded')
                                     with exp.add_slot('header'):
                                         with ui.row().classes('w-full items-center'):
                                             ui.label(f"KR: {kr.name}").classes('font-medium flex-grow')
                                             ui.label(f"{kr.current}/{kr.target}").classes('text-xs text-slate-500 mr-4')
-                                            
-                                            # Knob KR (Reativo)
-                                            k_knob = ui.knob(0, show_value=False, size='24px', track_color='grey-3').props('readonly color=blue')
-                                            k_knob.bind_value_from(kr, 'progress')
+                                            ui.knob(kr.progress, show_value=False, size='24px', track_color='grey-3').props(f'readonly color={BRAND["secondary"]}')
                                     
                                     with ui.column().classes('w-full p-4 bg-white gap-4'):
-                                        # Edição KR
-                                        with ui.row().classes('w-full gap-4'):
+                                        # Métricas KR
+                                        with ui.row().classes('w-full gap-4 items-center'):
                                             ui.input('Descrição do KR').bind_value(kr, 'name').on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense')
-                                            
-                                            # Inputs Numéricos Reativos
-                                            # .on('change') força o refresh dos knobs pai
                                             ui.number('Atual').bind_value(kr, 'current').on('blur', state.mark_dirty).on('change', lambda: render_management.refresh()).classes('w-24').props('outlined dense')
                                             ui.number('Meta').bind_value(kr, 'target').on('blur', state.mark_dirty).on('change', lambda: render_management.refresh()).classes('w-24').props('outlined dense')
-                                            
                                             ui.button(icon='delete', on_click=lambda k=kr, o=obj: (o.krs.remove(k), state.mark_dirty(), render_management.refresh())).props('flat round color=red')
                                     
                                         # Tarefas
                                         ui.separator()
                                         ui.label('Plano de Ação').classes('text-xs font-bold text-slate-400 uppercase tracking-widest')
-                                        
-                                        if not kr.tasks:
-                                            ui.label('Nenhuma tarefa vinculada.').classes('text-xs text-slate-300 italic')
-
                                         for task in kr.tasks:
-                                            with ui.row().classes('w-full items-center gap-2 bg-slate-50 p-2 rounded border border-slate-100'):
+                                            with ui.row().classes('w-full items-center gap-2 p-2 rounded border border-slate-100').style(f'background-color: {BRAND["gray_light"]}'):
                                                 # Descrição
-                                                ui.input().bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('borderless dense placeholder="Tarefa..."')
+                                                ui.input().bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('borderless dense placeholder="O que fazer?"')
                                                 
-                                                # Métricas da Tarefa (NOVO)
+                                                # NOVAS MÉTRICAS DE TAREFA
                                                 with ui.row().classes('items-center gap-1 bg-white px-2 rounded border border-slate-200'):
-                                                    ui.number().bind_value(task, 'current').on('blur', state.mark_dirty).props('borderless dense style="width: 40px" placeholder="0"')
+                                                    ui.number().bind_value(task, 'current').on('blur', state.mark_dirty).props('borderless dense style="width: 45px" placeholder="Real"')
                                                     ui.label('/').classes('text-slate-400')
-                                                    ui.number().bind_value(task, 'target').on('blur', state.mark_dirty).props('borderless dense style="width: 40px" placeholder="1"')
+                                                    ui.number().bind_value(task, 'target').on('blur', state.mark_dirty).props('borderless dense style="width: 45px" placeholder="Meta"')
+                                                    # Mini barra de progresso da tarefa
+                                                    ui.circular_progress(task.progress, min=0, max=1, show_value=False, size="16px").props(f'color={BRAND["primary"]}')
 
-                                                # Status e Resp
-                                                ui.select(list(STATUS_CONFIG.keys()), value=task.status).bind_value(task, 'status').on_value_change(state.mark_dirty).classes('w-36').props('borderless dense options-dense')
-                                                ui.input().bind_value(task, 'responsible').on('blur', state.mark_dirty).classes('w-20').props('borderless dense placeholder="Resp."')
+                                                # Status Customizado
+                                                def get_status_props(s):
+                                                    conf = STATUS_CONFIG.get(s, STATUS_CONFIG["Não Iniciado"])
+                                                    # Se for concluído, texto preto (lime), senão cor padrão
+                                                    txt_color = conf.get("text_color", conf["color"])
+                                                    return f'color={txt_color}'
+
+                                                s_sel = ui.select(list(STATUS_CONFIG.keys()), value=task.status).bind_value(task, 'status').on_value_change(state.mark_dirty)
+                                                s_sel.classes('w-36').props('borderless dense options-dense')
                                                 
                                                 # Prazo
-                                                with ui.input().bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-28').props('borderless dense') as d:
+                                                with ui.input().bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-28').props('borderless dense placeholder="Prazo"') as d:
                                                     with d.add_slot('append'):
                                                         ui.icon('calendar_today').on('click', lambda: date_menu.open()).classes('cursor-pointer text-xs text-slate-400')
                                                     with ui.menu() as date_menu:
@@ -455,56 +442,43 @@ def render_management(state: OKRState):
                                                 
                                                 ui.button(icon='close', on_click=lambda t=task, k=kr: (k.tasks.remove(t), state.mark_dirty(), render_management.refresh())).props('flat round dense size=sm color=red')
                                     
-                                        ui.button('Nova Tarefa', icon='add', on_click=lambda k=kr: (k.tasks.append(Task()), render_management.refresh())).props('flat color=blue size=sm width=full')
+                                        ui.button('Nova Tarefa', icon='add', on_click=lambda k=kr: (k.tasks.append(Task()), render_management.refresh())).props('flat size=sm width=full').style(f'color: {BRAND["primary"]}')
 
-                            ui.button('Adicionar Key Result', icon='add_circle_outline', on_click=lambda o=obj: (o.krs.append(KeyResult(name="Novo KR")), render_management.refresh())).props('flat color=blue classes="mt-2"')
+                            ui.button('Novo Key Result', icon='add_circle_outline', on_click=lambda o=obj: (o.krs.append(KeyResult(name="Novo KR")), render_management.refresh())).props('flat classes="mt-2"').style(f'color: {BRAND["secondary"]}')
 
 @ui.refreshable
 def render_dashboard(state: OKRState):
     df = state.to_dataframe()
     if df.empty or (len(df) == 1 and df['kr'].iloc[0] == ""):
-        with ui.column().classes('w-full items-center py-20'):
-            ui.icon('analytics', size='64px').classes('text-slate-200')
-            ui.label('Nenhum dado analítico disponível ainda.').classes('text-slate-400 mt-4')
-            return
+        ui.label('Sem dados.').classes('text-slate-400 mt-4')
+        return
 
     UIComponents.section_title("Dashboard Executivo", "insights")
-    
     df_krs = df[df['kr'] != ''].copy()
-    if df_krs.empty: return
-
-    # Cálculo seguro de progresso
-    with np.errstate(divide='ignore', invalid='ignore'):
-        df_krs['pct'] = np.clip(df_krs['avanco'] / df_krs['alvo'].replace(0, 1), 0, 1)
+    df_krs['pct'] = np.clip(df_krs['avanco'] / df_krs['alvo'].replace(0, 1), 0, 1)
     
+    # KPIs
     with ui.row().classes('w-full gap-4 mb-8'):
-        with ui.card().classes('flex-grow p-6 items-center border-b-4 border-blue-500'):
-            ui.label('Progresso Global').classes('text-xs font-bold text-slate-400 uppercase')
-            ui.label(f"{df_krs['pct'].mean()*100:.1f}%").classes('text-4xl font-black text-slate-800')
-        
-        with ui.card().classes('flex-grow p-6 items-center border-b-4 border-emerald-500'):
-            ui.label('KRs Concluídos').classes('text-xs font-bold text-slate-400 uppercase')
-            concluidos = len(df_krs[df_krs['pct'] >= 1])
-            ui.label(f"{concluidos} / {len(df_krs)}").classes('text-4xl font-black text-slate-800')
+        def kpi_card(title, value, color):
+            with ui.card().classes('flex-grow p-6 items-center border-b-4').style(f'border-bottom-color: {color}'):
+                ui.label(title).classes('text-xs font-bold text-slate-400 uppercase')
+                ui.label(value).classes('text-4xl font-black text-slate-800')
 
-        with ui.card().classes('flex-grow p-6 items-center border-b-4 border-amber-500'):
-            ui.label('Ações Pendentes').classes('text-xs font-bold text-slate-400 uppercase')
-            pendentes = len(df[df['status'] != 'Concluído'])
-            ui.label(str(pendentes)).classes('text-4xl font-black text-slate-800')
+        kpi_card('Progresso Global', f"{df_krs['pct'].mean()*100:.1f}%", BRAND['primary'])
+        kpi_card('KRs Concluídos', f"{len(df_krs[df_krs['pct'] >= 1])}", BRAND['lime'])
+        kpi_card('Ações Totais', str(len(df)), BRAND['secondary'])
 
+    # Gráficos
     with ui.row().classes('w-full gap-4'):
         with ui.card().classes('flex-grow p-4 h-96'):
-            ui.label('Distribuição de Status').classes('font-bold mb-4')
-            fig = px.pie(df_krs, names='status', color='status', 
-                         color_discrete_map={k: v['color'] for k, v in STATUS_CONFIG.items()})
-            fig.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+            ui.label('Status').classes('font-bold mb-4')
+            fig = px.pie(df_krs, names='status', color='status', color_discrete_map={k: v['color'] for k, v in STATUS_CONFIG.items()})
             ui.plotly(fig).classes('w-full h-full')
             
         with ui.card().classes('flex-grow p-4 h-96'):
-            ui.label('Progresso por Departamento').classes('font-bold mb-4')
+            ui.label('Por Departamento').classes('font-bold mb-4')
             df_dept = df_krs.groupby('departamento')['pct'].mean().reset_index()
-            fig2 = px.bar(df_dept, x='pct', y='departamento', orientation='h', range_x=[0,1])
-            fig2.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+            fig2 = px.bar(df_dept, x='pct', y='departamento', orientation='h', color_discrete_sequence=[BRAND['primary']])
             ui.plotly(fig2).classes('w-full h-full')
 
 def export_excel(state: OKRState):
@@ -512,9 +486,9 @@ def export_excel(state: OKRState):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
-    ui.download(output.getvalue(), f'OKRs_{state.user["cliente"]}_{date.today()}.xlsx')
+    ui.download(output.getvalue(), f'OKRs.xlsx')
 
-# --- 6. APP LAYOUT PRINCIPAL ---
+# --- 6. APP LAYOUT ---
 
 @ui.page('/')
 def main_page():
@@ -525,19 +499,22 @@ def main_page():
 
     state = OKRState(user_info)
 
+    # Configuração de Cores Globais do NiceGUI
+    ui.colors(primary=BRAND['primary'], secondary=BRAND['secondary'], accent=BRAND['lime'], positive=BRAND['lime'])
+
     with ui.header().classes('bg-white border-b border-slate-200 text-slate-800 p-4 justify-between items-center'):
         with ui.row().classes('items-center gap-4'):
             ui.button(icon='menu', on_click=lambda: drawer.toggle()).props('flat round color=slate')
-            ui.label('OKR Manager').classes('text-xl font-black text-blue-600')
-            ui.badge(user_info['cliente'], color='blue-1').classes('text-blue-700 font-bold')
+            ui.label('OKR Manager').classes('text-xl font-black').style(f'color: {BRAND["primary"]}')
+            ui.badge(user_info['cliente']).style(f'background-color: {BRAND["lavender"]}; color: {BRAND["dark"]}')
         
         with ui.row().classes('items-center gap-4'):
-            # BOTÃO DE SALVAR CORRIGIDO (FUNDO VERDE, TEXTO BRANCO)
-            save_btn = ui.button('Salvar Alterações', icon='save', on_click=state.save)
-            save_btn.classes('bg-green-600 text-white font-bold hover:bg-green-700')
+            # BOTÃO SALVAR (Visualização Garantida)
+            save_btn = ui.button('Salvar', icon='save', on_click=state.save)
+            save_btn.style(f'background-color: {BRAND["lime"]}; color: black; font-weight: bold;')
             save_btn.bind_visibility_from(state, 'is_dirty')
             
-            with ui.avatar(color='blue-600', text_color='white'):
+            with ui.avatar(text_color='white').style(f'background-color: {BRAND["primary"]}'):
                 ui.label(user_info['name'][0].upper())
             
             with ui.button(icon='expand_more').props('flat round'):
@@ -555,13 +532,12 @@ def main_page():
                 if ui.query('body').classes('w-full').width < 1024: 
                     drawer.close()
 
-            ui.label('MENU PRINCIPAL').classes('text-[10px] font-bold text-slate-400 px-6 py-4 tracking-widest')
-            ui.button('Painel de Gestão', icon='dashboard', on_click=lambda: navigate_to(render_management)).classes('w-full justify-start px-6 py-4 h-auto text-slate-600').props('flat no-caps')
-            ui.button('Dashboard Analítico', icon='insights', on_click=lambda: navigate_to(render_dashboard)).classes('w-full justify-start px-6 py-4 h-auto text-slate-600').props('flat no-caps')
+            ui.label('MENU').classes('text-[10px] font-bold text-slate-400 px-6 py-4 tracking-widest')
+            ui.button('Gestão', icon='dashboard', on_click=lambda: navigate_to(render_management)).classes('w-full justify-start px-6 py-4 h-auto text-slate-600').props('flat no-caps')
+            ui.button('Dashboard', icon='insights', on_click=lambda: navigate_to(render_dashboard)).classes('w-full justify-start px-6 py-4 h-auto text-slate-600').props('flat no-caps')
             
             ui.separator().classes('my-2')
-            ui.label('AÇÕES').classes('text-[10px] font-bold text-slate-400 px-6 py-4 tracking-widest')
-            ui.button('Exportar Excel', icon='file_download', on_click=lambda: export_excel(state)).classes('w-full justify-start px-6 py-4 h-auto text-emerald-600').props('flat no-caps')
+            ui.button('Excel', icon='file_download', on_click=lambda: export_excel(state)).classes('w-full justify-start px-6 py-4 h-auto').style(f'color: {BRAND["primary"]}').props('flat no-caps')
 
     content = ui.column().classes('w-full max-w-6xl mx-auto p-6 flex-grow')
     with content:
@@ -570,11 +546,10 @@ def main_page():
 # --- 7. INICIALIZAÇÃO ---
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
-        title="OKR SaaS Professional",
+        title="OKR SaaS",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8080)),
         storage_secret=os.getenv("STORAGE_SECRET", "super-secret-key-123"),
         language="pt-BR",
         favicon="🎯"
     )
-
