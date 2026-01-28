@@ -346,12 +346,19 @@ def login_page():
         else:
             ui.notify(f"Erro: {msg}", type="negative", position="top")
 
-    with ui.column().classes('absolute-center w-full max-w-md p-6'):
+    def toggle_password_visibility(input_field):
+        current_type = input_field._props.get('type', 'password')
+        if current_type == 'password':
+            input_field.props('type=text')
+        else:
+            input_field.props('type=password')
+
+    with ui.column().classes('absolute-center w-full max-w-md px-6'):
         with ui.card().classes('w-full shadow-2xl rounded-2xl overflow-hidden border-0'):
             # Header do card
             with ui.column().classes('w-full p-8 items-center').style(f'background: linear-gradient(135deg, {BRAND["primary"]} 0%, {BRAND["secondary"]} 100%);'):
-                ui.label('Gestão de OKR').classes('text-3xl font-black text-white')
-                ui.label('Gerencie seus objetivos estratégicos').classes('text-sm text-white opacity-90 mt-1')
+                ui.label('Gestão de OKR').classes('text-3xl font-black text-white text-center')
+                ui.label('Gerencie seus objetivos estratégicos').classes('text-sm text-white opacity-90 mt-1 text-center')
             
             with ui.column().classes('p-8'):
                 with ui.tabs().classes('w-full').props(f'active-color={BRAND["primary"]} indicator-color={BRAND["primary"]}') as tabs:
@@ -360,30 +367,28 @@ def login_page():
                 
                 with ui.tab_panels(tabs, value='Login').classes('w-full mt-6'):
                     with ui.tab_panel('Login'):
-                        ui.label('Acesse sua conta').classes('text-sm font-medium mb-4').style(f'color: {BRAND["gray_dark"]}')
-                        username = ui.input('Usuário', placeholder='seu@email.com').classes('w-full').props('outlined')
-                        password = ui.input('Senha', password=True, placeholder='••••••••').classes('w-full mt-4').props('outlined')
-                        with password.add_slot('append'):
-                            ui.icon('visibility').on('click', lambda: password.props(
-                                'type=text' if 'password' in password.props else 'type=password'
-                            )).classes('cursor-pointer')
-                        ui.button('Entrar', on_click=handle_login, icon='login').classes('w-full mt-6 font-semibold').style(
-                            f'background-color: {BRAND["primary"]}; color: white; padding: 12px;'
-                        ).props('rounded')
+                        with ui.column().classes('w-full gap-4'):
+                            ui.label('Acesse sua conta').classes('text-sm font-medium').style(f'color: {BRAND["gray_dark"]}')
+                            username = ui.input('Usuário', placeholder='seu@email.com').classes('w-full').props('outlined')
+                            password = ui.input('Senha', password=True, placeholder='••••••••').classes('w-full').props('outlined type=password')
+                            with password.add_slot('append'):
+                                ui.icon('visibility').on('click', lambda: toggle_password_visibility(password)).classes('cursor-pointer')
+                            ui.button('Entrar', on_click=handle_login, icon='login').classes('w-full font-semibold').style(
+                                f'background-color: {BRAND["primary"]}; color: white; padding: 12px;'
+                            ).props('rounded')
                     
                     with ui.tab_panel('Cadastro'):
-                        ui.label('Crie sua conta').classes('text-sm font-medium mb-4').style(f'color: {BRAND["gray_dark"]}')
-                        reg_name = ui.input('Nome completo', placeholder='João Silva').classes('w-full').props('outlined')
-                        reg_client = ui.input('Empresa', placeholder='Nome da sua empresa').classes('w-full mt-3').props('outlined')
-                        reg_user = ui.input('E-mail', placeholder='seu@email.com').classes('w-full mt-3').props('outlined')
-                        reg_pass = ui.input('Senha', password=True, placeholder='Mínimo 8 caracteres').classes('w-full mt-3').props('outlined')
-                        with reg_pass.add_slot('append'):
-                            ui.icon('visibility').on('click', lambda: reg_pass.props(
-                                'type=text' if 'password' in reg_pass.props else 'type=password'
-                            )).classes('cursor-pointer')
-                        ui.button('Criar conta', on_click=handle_register, icon='person_add').classes('w-full mt-6 font-semibold').style(
-                            f'background-color: {BRAND["success"]}; color: white; padding: 12px;'
-                        ).props('rounded')
+                        with ui.column().classes('w-full gap-4'):
+                            ui.label('Crie sua conta').classes('text-sm font-medium').style(f'color: {BRAND["gray_dark"]}')
+                            reg_name = ui.input('Nome completo', placeholder='João Silva').classes('w-full').props('outlined')
+                            reg_client = ui.input('Empresa', placeholder='Nome da sua empresa').classes('w-full').props('outlined')
+                            reg_user = ui.input('E-mail', placeholder='seu@email.com').classes('w-full').props('outlined')
+                            reg_pass = ui.input('Senha', password=True, placeholder='Mínimo 8 caracteres').classes('w-full').props('outlined type=password')
+                            with reg_pass.add_slot('append'):
+                                ui.icon('visibility').on('click', lambda: toggle_password_visibility(reg_pass)).classes('cursor-pointer')
+                            ui.button('Criar conta', on_click=handle_register, icon='person_add').classes('w-full font-semibold').style(
+                                f'background-color: {BRAND["success"]}; color: white; padding: 12px;'
+                            ).props('rounded')
 
 @ui.refreshable
 def render_management(state: OKRState):
