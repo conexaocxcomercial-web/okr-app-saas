@@ -350,7 +350,7 @@ def login_page():
         with ui.card().classes('w-full shadow-2xl rounded-2xl overflow-hidden border-0'):
             # Header do card
             with ui.column().classes('w-full p-8 items-center').style(f'background: linear-gradient(135deg, {BRAND["primary"]} 0%, {BRAND["secondary"]} 100%);'):
-                ui.label('OKR Manager').classes('text-3xl font-black text-white')
+                ui.label('Gestão de OKR').classes('text-3xl font-black text-white')
                 ui.label('Gerencie seus objetivos estratégicos').classes('text-sm text-white opacity-90 mt-1')
             
             with ui.column().classes('p-8'):
@@ -392,9 +392,9 @@ def render_management(state: OKRState):
     # Header da página
     with ui.row().classes('w-full justify-between items-start mb-8'):
         UIComponents.section_title(
-            "Gestão Estratégica", 
+            "Painel de Gestão", 
             "Defina objetivos, resultados-chave e planos de ação",
-            "flag"
+            None
         )
         with ui.row().classes('gap-3'):
             ui.button('Gerenciar departamentos', icon='corporate_fare', on_click=lambda: dept_dialog.open()).props('outline').style(
@@ -633,7 +633,7 @@ def render_dashboard(state: OKRState):
         )
         return
 
-    UIComponents.section_title("Dashboard Executivo", "Visão analítica do progresso estratégico", "insights")
+    UIComponents.section_title("Dashboard", "Visão analítica do progresso estratégico", None)
     
     df_krs = df[df['kr'] != ''].copy()
     df_krs['pct'] = np.clip(df_krs['avanco'] / df_krs['alvo'].replace(0, 1), 0, 1)
@@ -724,8 +724,7 @@ def main_page():
             with ui.row().classes('items-center gap-4'):
                 ui.button(icon='menu', on_click=lambda: drawer.toggle()).props('flat round').style(f'color: {BRAND["dark"]}')
                 with ui.row().classes('items-center gap-2'):
-                    ui.label('OKR').classes('text-2xl font-black').style(f'color: {BRAND["primary"]}')
-                    ui.label('Manager').classes('text-2xl font-light').style(f'color: {BRAND["dark"]}')
+                    ui.label('Gestão de OKR').classes('text-2xl font-black').style(f'color: {BRAND["primary"]}')
                 ui.separator().props('vertical').classes('h-8')
                 ui.badge(user_info['cliente'], color='transparent').classes('text-sm font-medium px-3 py-1 rounded-full').style(
                     f'background-color: {BRAND["lavender"]}; color: {BRAND["dark"]}'
@@ -761,11 +760,11 @@ def main_page():
                     with content: view_func(state)
 
                 with ui.column().classes('w-full gap-1'):
-                    ui.button('Gestão Estratégica', icon='flag', on_click=lambda: navigate_to(render_management, 'Gestão')).classes(
+                    ui.button('Painel de Gestão', icon='flag', on_click=lambda: navigate_to(render_management, 'Gestão')).classes(
                         'w-full justify-start px-4 py-3 rounded-lg font-medium text-left'
                     ).props('flat no-caps').style(f'color: {BRAND["dark"]}')
                     
-                    ui.button('Dashboard Executivo', icon='insights', on_click=lambda: navigate_to(render_dashboard, 'Dashboard')).classes(
+                    ui.button('Dashboard', icon='insights', on_click=lambda: navigate_to(render_dashboard, 'Dashboard')).classes(
                         'w-full justify-start px-4 py-3 rounded-lg font-medium text-left'
                     ).props('flat no-caps').style(f'color: {BRAND["dark"]}')
             
