@@ -15,7 +15,7 @@ from io import BytesIO
 # --- 1. CONFIGURAÇÃO E DEBUG ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Branding
+# Branding da Empresa
 BRAND = {
     "primary": "#7371ff", "secondary": "#ff43c0",
     "lime": "#bef533", "lavender": "#dbbfff",
@@ -29,7 +29,7 @@ STATUS_CONFIG = {
     "Concluído": {"color": BRAND["lime"], "text_color": "black", "icon": "check_circle"}
 }
 
-# --- 2. PERSISTÊNCIA ---
+# --- 2. PERSISTÊNCIA (ORM) ---
 Base = declarative_base()
 
 class UserDB(Base):
@@ -55,7 +55,7 @@ class OKRDataDB(Base):
 
 class DatabaseManager:
     def __init__(self, url):
-        self.SessionLocal = None # Inicializa como None para evitar o erro "no attribute"
+        self.SessionLocal = None
         self.init_error = None
         
         if not url:
@@ -63,23 +63,34 @@ class DatabaseManager:
             print(f"❌ {self.init_error}")
             return
 
-        # Ajuste para SQLAlchemy (Postgres)
+        # Ajuste obrigatório para SQLAlchemy com Postgres
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
 
         try:
-            self.engine = create_engine(url, pool_pre_ping=True)
+            # --- O PULO DO GATO (Configuração para Pooler) ---
+            self.engine = create_engine(
+                url,
+                pool_pre_ping=True,      # Testa a conexão antes de usar (evita "server closed connection")
+                pool_recycle=1800,       # Renova a conexão a cada 30 min para não expirar
+                connect_args={
+                    "connect_timeout": 10,  # Não trava o app se a rede engasgar
+                    "keepalives": 1,        # Mantém o TCP vivo
+                }
+            )
+            
+            # Cria tabelas se não existirem
             Base.metadata.create_all(self.engine)
             self.SessionLocal = sessionmaker(bind=self.engine)
-            print("✅ Banco conectado com sucesso!")
+            print("✅ Banco conectado com sucesso via Pooler!")
+            
         except Exception as e:
             self.init_error = str(e)
             print(f"❌ ERRO CRÍTICO DE CONEXÃO: {e}")
 
     def get_session(self) -> Session:
         if self.SessionLocal is None:
-            # Lança o erro real para aparecer na tela do usuário
-            raise Exception(f"Falha de Conexão: {self.init_error}")
+            raise Exception(f"Banco desconectado: {self.init_error}")
         return self.SessionLocal()
 
     def login(self, username, password) -> Optional[Dict]:
@@ -100,13 +111,12 @@ class DatabaseManager:
                 session.commit()
                 return True, "Usuário criado com sucesso"
         except Exception as e:
-            return False, f"Erro: {str(e)}"
+            # Retorna o erro exato para aparecer na notificação vermelha
+            return False, str(e)
 
     def load_client_data(self, client: str) -> pd.DataFrame:
         try:
-            # Se não conectou, retorna vazio sem quebrar
             if self.SessionLocal is None: return pd.DataFrame()
-            
             with self.engine.connect() as conn:
                 return pd.read_sql(text("SELECT * FROM okr_data WHERE cliente = :c"), conn, params={'c': client})
         except:
@@ -186,8 +196,7 @@ class OKRState:
             self.is_dirty = False
             ui.notify("Dados salvos com segurança no Cloud!", type="positive", color=BRAND['lime'], text_color=BRAND['dark'])
         else:
-            # Mostra erro se houver falha de conexão
-            err = db_manager.init_error or "Erro desconhecido"
+            err = db_manager.init_error or "Erro de conexão"
             ui.notify(f"Erro ao salvar: {err}", type="negative")
 
     def rename_department(self, old_name: str, new_name: str):
@@ -292,18 +301,18 @@ def login_page():
 
     async def handle_register():
         if not all([reg_user.value, reg_pass.value, reg_name.value, reg_client.value]):
-            ui.notify("Todos os campos são obrigatórios", type="warning")
+            ui.notify("Preencha todos os campos", type="warning")
             return
         
-        # Tenta criar e exibe o erro REAL se falhar
+        # Chama a função e captura a mensagem de erro detalhada
         success, msg = db_manager.create_user(reg_user.value, reg_pass.value, reg_name.value, reg_client.value)
         
         if success:
             ui.notify(msg, type="positive", color=BRAND['lime'], text_color='black')
             tabs.value = 'Login'
         else:
-            # Aqui vai aparecer o motivo da falha (ex: senha errada, link errado)
-            ui.notify(f"Falha: {msg}", type="negative", close_button=True, multi_line=True)
+            # Exibe o erro real vindo do banco (ex: timeout, falha de senha)
+            ui.notify(f"Erro: {msg}", type="negative", close_button=True, multi_line=True)
 
     with ui.column().classes('absolute-center w-full max-w-md p-4'):
         with ui.card().classes('w-full shadow-2xl p-8 border-t-4').style(f'border-top-color: {BRAND["primary"]}'):
@@ -324,10 +333,10 @@ def login_page():
                     ui.button('Entrar', on_click=handle_login).classes('w-full mt-8 font-bold text-white').style(f'background-color: {BRAND["primary"]}')
                 
                 with ui.tab_panel('Cadastro'):
-                    ui.label('Crie um acesso para seu Cliente').classes('text-xs text-slate-400 mb-2')
+                    ui.label('Novo Acesso').classes('text-xs text-slate-400 mb-2')
                     reg_name = ui.input('Nome Completo').classes('w-full').props('outlined dense')
-                    reg_client = ui.input('Nome da Empresa (Chave)').classes('w-full mt-2').props('outlined dense')
-                    reg_user = ui.input('Login / Email').classes('w-full mt-2').props('outlined dense')
+                    reg_client = ui.input('Empresa (Chave)').classes('w-full mt-2').props('outlined dense')
+                    reg_user = ui.input('Login').classes('w-full mt-2').props('outlined dense')
                     reg_pass = ui.input('Senha', password=True).classes('w-full mt-2').props('outlined dense')
                     with reg_pass.add_slot('append'):
                         ui.icon('visibility').on('click', lambda: reg_pass.props(
@@ -395,17 +404,13 @@ def render_management(state: OKRState):
                     with UIComponents.card_container().classes('mb-6'):
                         with ui.row().classes('w-full items-center gap-4'):
                             ui.input().bind_value(obj, 'name').on('blur', state.mark_dirty).classes('text-lg font-bold flex-grow').props('borderless dense')
-                            
-                            # Knob Progresso
                             ui.knob(obj.progress, show_value=False, size='32px', track_color='grey-3').props(f'readonly color={BRAND["primary"]}')
                             ui.label().bind_text_from(obj, 'progress', lambda p: f"{p*100:.0f}%").classes('font-black text-xl').style(f'color: {BRAND["primary"]}')
-                            
                             with ui.button(icon='more_vert').props('flat round'):
                                 with ui.menu():
                                     with ui.menu_item(on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())):
                                         ui.label('Excluir').classes('text-red-500')
                         
-                        # KRs
                         with ui.column().classes('w-full mt-4 gap-2'):
                             for kr in obj.krs:
                                 with ui.expansion().classes('w-full border border-slate-100 rounded').style(f'background-color: {BRAND["gray_light"]}') as exp:
@@ -417,19 +422,16 @@ def render_management(state: OKRState):
                                             ui.knob(kr.progress, show_value=False, size='24px', track_color='grey-3').props(f'readonly color={BRAND["secondary"]}')
                                     
                                     with ui.column().classes('w-full p-4 bg-white gap-4'):
-                                        # Métricas KR
                                         with ui.row().classes('w-full gap-4 items-center'):
                                             ui.input('Descrição do KR').bind_value(kr, 'name').on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense')
                                             ui.number('Atual').bind_value(kr, 'current').on('blur', state.mark_dirty).on('change', lambda: render_management.refresh()).classes('w-24').props('outlined dense')
                                             ui.number('Meta').bind_value(kr, 'target').on('blur', state.mark_dirty).on('change', lambda: render_management.refresh()).classes('w-24').props('outlined dense')
                                             ui.button(icon='delete', on_click=lambda k=kr, o=obj: (o.krs.remove(k), state.mark_dirty(), render_management.refresh())).props('flat round color=red')
                                     
-                                        # Tarefas
                                         ui.separator()
                                         ui.label('Plano de Ação').classes('text-xs font-bold text-slate-400 uppercase tracking-widest')
                                         for task in kr.tasks:
                                             with ui.row().classes('w-full items-center gap-2 p-2 rounded border border-slate-100').style(f'background-color: {BRAND["gray_light"]}'):
-                                                # Descrição
                                                 ui.input().bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('borderless dense placeholder="O que fazer?"')
                                                 
                                                 def get_status_props(s):
@@ -440,10 +442,8 @@ def render_management(state: OKRState):
                                                 s_sel = ui.select(list(STATUS_CONFIG.keys()), value=task.status).bind_value(task, 'status').on_value_change(state.mark_dirty)
                                                 s_sel.classes('w-36').props('borderless dense options-dense')
                                                 
-                                                # Responsável
                                                 ui.input().bind_value(task, 'responsible').on('blur', state.mark_dirty).classes('w-24').props('borderless dense placeholder="Resp."')
 
-                                                # Prazo
                                                 with ui.input().bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-28').props('borderless dense placeholder="Prazo"') as d:
                                                     with d.add_slot('append'):
                                                         ui.icon('calendar_today').on('click', lambda: date_menu.open()).classes('cursor-pointer text-xs text-slate-400')
