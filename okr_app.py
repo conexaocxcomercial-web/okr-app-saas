@@ -381,10 +381,10 @@ def login_page():
         else:
             input_field.props('type=password')
 
-    # Login limpo sem gradientes excessivos
     with ui.column().classes('absolute-center w-full max-w-md px-6'):
         with ui.card().classes('w-full shadow-lg rounded-xl overflow-hidden'):
-            with ui.column().classes('w-full p-8 items-center bg-white'):
+            # AJUSTE 2: Alinhamento vertical corrigido - adicionado 'justify-center' na coluna
+            with ui.column().classes('w-full p-8 items-center justify-center bg-white'):
                 ui.label('OKR Manager').classes('text-3xl font-black').style(f'color: {BRAND["primary"]}')
                 ui.label('Gestão estratégica de objetivos').classes('text-sm mt-1').style(f'color: {BRAND["text_light"]}')
             
@@ -668,11 +668,13 @@ def render_management(state: OKRState):
                                                                         
                                                                         ui.input(placeholder='Responsável', label='Responsável').bind_value(task, 'responsible').on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
 
-                                                                        with ui.input(placeholder='dd/mm/aaaa', label='Prazo').bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white') as d:
-                                                                            with d.add_slot('append'):
-                                                                                ui.icon('event', size='sm').on('click', lambda: date_menu.open()).classes('cursor-pointer')
+                                                                        # AJUSTE 1: Corrigido - removido ícone event duplicado no slot append
+                                                                        # O menu de data agora abre apenas ao clicar no input, sem duplicação
+                                                                        deadline_input = ui.input(placeholder='dd/mm/aaaa', label='Prazo').bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
+                                                                        with deadline_input:
                                                                             with ui.menu() as date_menu:
-                                                                                ui.date().bind_value(d).on_value_change(lambda: (date_menu.close(), state.mark_dirty()))
+                                                                                ui.date().bind_value(deadline_input).on_value_change(lambda: (date_menu.close(), state.mark_dirty()))
+                                                                        deadline_input.on('click', date_menu.open)
                                                                         
                                                                         ui.button(icon='close', on_click=lambda t=task, k=kr: (
                                                                             k.tasks.remove(t), 
