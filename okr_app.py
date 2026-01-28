@@ -15,16 +15,6 @@ from io import BytesIO
 # --- 1. CONFIGURAÇÃO E DEBUG ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-print("-" * 50)
-if not DATABASE_URL:
-    print("⚠️  AVISO: DATABASE_URL não encontrada. Usando SQLite Local.")
-    DATABASE_URL = "sqlite:///okr_saas.db"
-else:
-    print("✅  DATABASE_URL encontrada.")
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-print("-" * 50)
-
 # Branding
 BRAND = {
     "primary": "#7371ff", "secondary": "#ff43c0",
@@ -65,15 +55,31 @@ class OKRDataDB(Base):
 
 class DatabaseManager:
     def __init__(self, url):
+        self.SessionLocal = None # Inicializa como None para evitar o erro "no attribute"
+        self.init_error = None
+        
+        if not url:
+            self.init_error = "Variável DATABASE_URL não encontrada no Render."
+            print(f"❌ {self.init_error}")
+            return
+
+        # Ajuste para SQLAlchemy (Postgres)
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+
         try:
             self.engine = create_engine(url, pool_pre_ping=True)
             Base.metadata.create_all(self.engine)
             self.SessionLocal = sessionmaker(bind=self.engine)
-            print("✅  Banco conectado.")
+            print("✅ Banco conectado com sucesso!")
         except Exception as e:
-            print(f"❌  ERRO DE CONEXÃO: {e}")
+            self.init_error = str(e)
+            print(f"❌ ERRO CRÍTICO DE CONEXÃO: {e}")
 
     def get_session(self) -> Session:
+        if self.SessionLocal is None:
+            # Lança o erro real para aparecer na tela do usuário
+            raise Exception(f"Falha de Conexão: {self.init_error}")
         return self.SessionLocal()
 
     def login(self, username, password) -> Optional[Dict]:
@@ -94,10 +100,13 @@ class DatabaseManager:
                 session.commit()
                 return True, "Usuário criado com sucesso"
         except Exception as e:
-            return False, str(e)
+            return False, f"Erro: {str(e)}"
 
     def load_client_data(self, client: str) -> pd.DataFrame:
         try:
+            # Se não conectou, retorna vazio sem quebrar
+            if self.SessionLocal is None: return pd.DataFrame()
+            
             with self.engine.connect() as conn:
                 return pd.read_sql(text("SELECT * FROM okr_data WHERE cliente = :c"), conn, params={'c': client})
         except:
@@ -177,7 +186,9 @@ class OKRState:
             self.is_dirty = False
             ui.notify("Dados salvos com segurança no Cloud!", type="positive", color=BRAND['lime'], text_color=BRAND['dark'])
         else:
-            ui.notify("Erro de conexão ao salvar.", type="negative")
+            # Mostra erro se houver falha de conexão
+            err = db_manager.init_error or "Erro desconhecido"
+            ui.notify(f"Erro ao salvar: {err}", type="negative")
 
     def rename_department(self, old_name: str, new_name: str):
         if not new_name: return
@@ -277,18 +288,22 @@ def login_page():
             app.storage.user.update({'authenticated': True, 'user_info': user})
             ui.navigate.to('/')
         else:
-            ui.notify("Login falhou", type="negative")
+            ui.notify("Usuário ou senha incorretos", type="negative")
 
     async def handle_register():
         if not all([reg_user.value, reg_pass.value, reg_name.value, reg_client.value]):
-            ui.notify("Preencha tudo", type="warning")
+            ui.notify("Todos os campos são obrigatórios", type="warning")
             return
+        
+        # Tenta criar e exibe o erro REAL se falhar
         success, msg = db_manager.create_user(reg_user.value, reg_pass.value, reg_name.value, reg_client.value)
+        
         if success:
             ui.notify(msg, type="positive", color=BRAND['lime'], text_color='black')
             tabs.value = 'Login'
         else:
-            ui.notify(msg, type="negative")
+            # Aqui vai aparecer o motivo da falha (ex: senha errada, link errado)
+            ui.notify(f"Falha: {msg}", type="negative", close_button=True, multi_line=True)
 
     with ui.column().classes('absolute-center w-full max-w-md p-4'):
         with ui.card().classes('w-full shadow-2xl p-8 border-t-4').style(f'border-top-color: {BRAND["primary"]}'):
@@ -309,9 +324,10 @@ def login_page():
                     ui.button('Entrar', on_click=handle_login).classes('w-full mt-8 font-bold text-white').style(f'background-color: {BRAND["primary"]}')
                 
                 with ui.tab_panel('Cadastro'):
-                    reg_name = ui.input('Nome').classes('w-full').props('outlined dense')
-                    reg_client = ui.input('Empresa').classes('w-full mt-2').props('outlined dense')
-                    reg_user = ui.input('Usuário').classes('w-full mt-2').props('outlined dense')
+                    ui.label('Crie um acesso para seu Cliente').classes('text-xs text-slate-400 mb-2')
+                    reg_name = ui.input('Nome Completo').classes('w-full').props('outlined dense')
+                    reg_client = ui.input('Nome da Empresa (Chave)').classes('w-full mt-2').props('outlined dense')
+                    reg_user = ui.input('Login / Email').classes('w-full mt-2').props('outlined dense')
                     reg_pass = ui.input('Senha', password=True).classes('w-full mt-2').props('outlined dense')
                     with reg_pass.add_slot('append'):
                         ui.icon('visibility').on('click', lambda: reg_pass.props(
@@ -377,7 +393,6 @@ def render_management(state: OKRState):
                 
                 for obj in objs:
                     with UIComponents.card_container().classes('mb-6'):
-                        # Objetivo
                         with ui.row().classes('w-full items-center gap-4'):
                             ui.input().bind_value(obj, 'name').on('blur', state.mark_dirty).classes('text-lg font-bold flex-grow').props('borderless dense')
                             
@@ -390,7 +405,7 @@ def render_management(state: OKRState):
                                     with ui.menu_item(on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())):
                                         ui.label('Excluir').classes('text-red-500')
                         
-                        # Lista KRs
+                        # KRs
                         with ui.column().classes('w-full mt-4 gap-2'):
                             for kr in obj.krs:
                                 with ui.expansion().classes('w-full border border-slate-100 rounded').style(f'background-color: {BRAND["gray_light"]}') as exp:
