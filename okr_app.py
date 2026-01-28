@@ -386,7 +386,7 @@ def render_management(state: OKRState):
                                     with ui.menu_item(on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())):
                                         ui.label('Excluir').classes('text-red-500')
                         
-                        ui.linear_progress(value=obj.progress).classes('h-2 rounded-full mt-2').props(f'color={BRAND["primary"]}')
+                        # -- REMOVIDA A BARRA DE PROGRESSO COMPRIDA DAQUI --
                         
                         # KRs
                         with ui.column().classes('w-full mt-4 gap-2'):
@@ -415,18 +415,15 @@ def render_management(state: OKRState):
                                                 # Descrição
                                                 ui.input().bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('borderless dense placeholder="O que fazer?"')
                                                 
-                                                # NOVAS MÉTRICAS DE TAREFA
+                                                # MÉTRICAS DE TAREFA (SEM BARRA VISUAL)
                                                 with ui.row().classes('items-center gap-1 bg-white px-2 rounded border border-slate-200'):
                                                     ui.number().bind_value(task, 'current').on('blur', state.mark_dirty).props('borderless dense style="width: 45px" placeholder="Real"')
                                                     ui.label('/').classes('text-slate-400')
                                                     ui.number().bind_value(task, 'target').on('blur', state.mark_dirty).props('borderless dense style="width: 45px" placeholder="Meta"')
-                                                    # Mini barra de progresso da tarefa
-                                                    ui.circular_progress(task.progress, min=0, max=1, show_value=False, size="16px").props(f'color={BRAND["primary"]}')
 
                                                 # Status Customizado
                                                 def get_status_props(s):
                                                     conf = STATUS_CONFIG.get(s, STATUS_CONFIG["Não Iniciado"])
-                                                    # Se for concluído, texto preto (lime), senão cor padrão
                                                     txt_color = conf.get("text_color", conf["color"])
                                                     return f'color={txt_color}'
 
