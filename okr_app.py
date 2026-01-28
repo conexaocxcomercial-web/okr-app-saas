@@ -63,23 +63,20 @@ class DatabaseManager:
             print(f"❌ {self.init_error}")
             return
 
-        # Ajuste obrigatório para SQLAlchemy com Postgres
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
 
         try:
-            # --- O PULO DO GATO (Configuração para Pooler) ---
+            # Configuração otimizada para Supabase Pooler (Porta 6543)
             self.engine = create_engine(
                 url,
-                pool_pre_ping=True,      # Testa a conexão antes de usar (evita "server closed connection")
-                pool_recycle=1800,       # Renova a conexão a cada 30 min para não expirar
+                pool_pre_ping=True,
+                pool_recycle=1800,
                 connect_args={
-                    "connect_timeout": 10,  # Não trava o app se a rede engasgar
-                    "keepalives": 1,        # Mantém o TCP vivo
+                    "connect_timeout": 10,
+                    "keepalives": 1,
                 }
             )
-            
-            # Cria tabelas se não existirem
             Base.metadata.create_all(self.engine)
             self.SessionLocal = sessionmaker(bind=self.engine)
             print("✅ Banco conectado com sucesso via Pooler!")
@@ -111,7 +108,6 @@ class DatabaseManager:
                 session.commit()
                 return True, "Usuário criado com sucesso"
         except Exception as e:
-            # Retorna o erro exato para aparecer na notificação vermelha
             return False, str(e)
 
     def load_client_data(self, client: str) -> pd.DataFrame:
@@ -194,7 +190,8 @@ class OKRState:
         df = self.to_dataframe()
         if db_manager.sync_data(df, self.user['cliente']):
             self.is_dirty = False
-            ui.notify("Dados salvos com segurança no Cloud!", type="positive", color=BRAND['lime'], text_color=BRAND['dark'])
+            # MENSAGEM AJUSTADA AQUI
+            ui.notify("Dados salvos", type="positive", color=BRAND['lime'], text_color=BRAND['dark'], icon="check")
         else:
             err = db_manager.init_error or "Erro de conexão"
             ui.notify(f"Erro ao salvar: {err}", type="negative")
@@ -304,14 +301,12 @@ def login_page():
             ui.notify("Preencha todos os campos", type="warning")
             return
         
-        # Chama a função e captura a mensagem de erro detalhada
         success, msg = db_manager.create_user(reg_user.value, reg_pass.value, reg_name.value, reg_client.value)
         
         if success:
             ui.notify(msg, type="positive", color=BRAND['lime'], text_color='black')
             tabs.value = 'Login'
         else:
-            # Exibe o erro real vindo do banco (ex: timeout, falha de senha)
             ui.notify(f"Erro: {msg}", type="negative", close_button=True, multi_line=True)
 
     with ui.column().classes('absolute-center w-full max-w-md p-4'):
