@@ -6,36 +6,47 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine, Column, String, Float, text
+from sqlalchemy import create_engine, Column, String, Float, text, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
 from nicegui import ui, app
 import plotly.express as px
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO E DESIGN SYSTEM (BRANDING) ---
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///okr_saas.db")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# --- 1. CONFIGURAÇÃO E DEBUG ---
+# Tenta pegar a URL. Se falhar, usa SQLite mas AVISA no log.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Paleta da Empresa
+print("-" * 50)
+if not DATABASE_URL:
+    print("⚠️  AVISO: DATABASE_URL não encontrada via Env Var.")
+    print("⚠️  O app está usando SQLite LOCAL (Memória Temporária).")
+    print("⚠️  Dados serão perdidos ao reiniciar.")
+    DATABASE_URL = "sqlite:///okr_saas.db"
+else:
+    print("✅  DATABASE_URL encontrada.")
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    # Mascara a senha para não vazar no log
+    safe_url = DATABASE_URL.split("@")[-1] 
+    print(f"✅  Conectando em: ...@{safe_url}")
+print("-" * 50)
+
+# Branding
 BRAND = {
-    "primary": "#7371ff",    # Roxo/Azul Vibrante
-    "secondary": "#ff43c0",  # Rosa Choque
-    "lime": "#bef533",       # Verde Lima
-    "lavender": "#dbbfff",   # Lilás Claro
-    "dark": "#1e1e1e",       # Preto Suave
-    "gray_light": "#f3f4f6"  # Cinza neutro para fundos
+    "primary": "#7371ff", "secondary": "#ff43c0",
+    "lime": "#bef533", "lavender": "#dbbfff",
+    "dark": "#1e1e1e", "gray_light": "#f3f4f6"
 }
 
-# Configuração de Cores para Gráficos e Status
 STATUS_CONFIG = {
-    "Não Iniciado": {"color": "#ef4444", "icon": "radio_button_unchecked"}, # Vermelho
+    "Não Iniciado": {"color": "#ef4444", "icon": "radio_button_unchecked"},
     "Em Andamento": {"color": BRAND["primary"], "icon": "sync"},
-    "Pausado": {"color": "#f59e0b", "icon": "pause_circle"}, # Laranja
-    "Concluído": {"color": BRAND["lime"], "text_color": "black", "icon": "check_circle"} # Lima com texto preto
+    "Pausado": {"color": "#f59e0b", "icon": "pause_circle"},
+    "Concluído": {"color": BRAND["lime"], "text_color": "black", "icon": "check_circle"}
 }
 
-# --- 2. PERSISTÊNCIA (SQLAlchemy ORM) ---
+# --- 2. PERSISTÊNCIA ---
 Base = declarative_base()
 
 class UserDB(Base):
@@ -43,12 +54,12 @@ class UserDB(Base):
     username = Column(String, primary_key=True)
     password = Column(String)
     name = Column(String)
-    cliente = Column(String)
+    cliente = Column(String) # A chave do multi-tenant
 
 class OKRDataDB(Base):
     __tablename__ = 'okr_data'
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    cliente = Column(String, index=True)
+    cliente = Column(String, index=True) # Separação de dados
     departamento = Column(String)
     objetivo = Column(String)
     kr = Column(String)
@@ -56,49 +67,81 @@ class OKRDataDB(Base):
     status = Column(String)
     responsavel = Column(String)
     prazo = Column(String)
-    # Métricas KR
-    avanco = Column(Float)
-    alvo = Column(Float)
-    # Métricas Tarefa (Plano de Ação)
+    avanco = Column(Float, default=0.0)
+    alvo = Column(Float, default=1.0)
     tarefa_avanco = Column(Float, default=0.0)
     tarefa_alvo = Column(Float, default=1.0)
 
 class DatabaseManager:
     def __init__(self, url):
-        self.engine = create_engine(url)
-        Base.metadata.create_all(self.engine)
-        self.SessionLocal = sessionmaker(bind=self.engine)
+        try:
+            self.engine = create_engine(url, pool_pre_ping=True)
+            Base.metadata.create_all(self.engine)
+            self.SessionLocal = sessionmaker(bind=self.engine)
+            print("✅  Tabelas sincronizadas com sucesso.")
+        except Exception as e:
+            print(f"❌  ERRO CRÍTICO NO BANCO: {e}")
 
     def get_session(self) -> Session:
         return self.SessionLocal()
 
     def login(self, username, password) -> Optional[Dict]:
-        with self.get_session() as session:
-            user = session.query(UserDB).filter_by(username=username, password=password).first()
-            if user:
-                return {"username": user.username, "name": user.name, "cliente": user.cliente}
+        try:
+            with self.get_session() as session:
+                user = session.query(UserDB).filter_by(username=username, password=password).first()
+                if user:
+                    print(f"Login Sucesso: {username} (Cliente: {user.cliente})")
+                    return {"username": user.username, "name": user.name, "cliente": user.cliente}
+                return None
+        except Exception as e:
+            print(f"Erro no Login: {e}")
             return None
 
     def create_user(self, username, password, name, client) -> tuple[bool, str]:
-        with self.get_session() as session:
-            if session.query(UserDB).filter_by(username=username).first():
-                return False, "Usuário já existe"
-            new_user = UserDB(username=username, password=password, name=name, cliente=client)
-            session.add(new_user)
-            session.commit()
-            return True, "Usuário criado com sucesso"
+        try:
+            with self.get_session() as session:
+                if session.query(UserDB).filter_by(username=username).first():
+                    return False, "Usuário já existe"
+                new_user = UserDB(username=username, password=password, name=name, cliente=client)
+                session.add(new_user)
+                session.commit()
+                print(f"Novo Usuário Criado: {username} no cliente {client}")
+                return True, "Usuário criado com sucesso"
+        except Exception as e:
+            print(f"Erro ao criar user: {e}")
+            return False, f"Erro no banco: {str(e)}"
 
     def load_client_data(self, client: str) -> pd.DataFrame:
-        with self.engine.connect() as conn:
-            return pd.read_sql(text("SELECT * FROM okr_data WHERE cliente = :c"), conn, params={'c': client})
+        """Carrega APENAS dados do cliente logado"""
+        try:
+            with self.engine.connect() as conn:
+                # Segurança: Filtra estritamente pelo cliente
+                return pd.read_sql(text("SELECT * FROM okr_data WHERE cliente = :c"), conn, params={'c': client})
+        except Exception as e:
+            print(f"Erro ao carregar dados: {e}")
+            return pd.DataFrame()
 
     def sync_data(self, df: pd.DataFrame, client: str):
-        with self.get_session() as session:
-            session.query(OKRDataDB).filter_by(cliente=client).delete()
-            if not df.empty:
-                data_dicts = df.to_dict(orient='records')
-                session.bulk_insert_mappings(OKRDataDB, data_dicts)
-            session.commit()
+        """Salva dados APENAS do cliente logado"""
+        try:
+            with self.get_session() as session:
+                # 1. Limpa dados antigos SÓ DESSE CLIENTE
+                deleted = session.query(OKRDataDB).filter_by(cliente=client).delete()
+                print(f"Sync: Removidos {deleted} registros antigos de {client}")
+                
+                # 2. Insere novos dados se houver
+                if not df.empty:
+                    # Garante que a coluna cliente está correta no DataFrame antes de salvar
+                    df['cliente'] = client 
+                    data_dicts = df.to_dict(orient='records')
+                    session.bulk_insert_mappings(OKRDataDB, data_dicts)
+                    print(f"Sync: Inseridos {len(df)} novos registros para {client}")
+                
+                session.commit()
+                return True
+        except Exception as e:
+            print(f"Erro ao salvar: {e}")
+            return False
 
 db_manager = DatabaseManager(DATABASE_URL)
 
@@ -157,15 +200,18 @@ class OKRState:
         self.is_dirty = True
 
     def load(self):
+        # Carrega dados filtrados pelo cliente do usuário logado
         df = db_manager.load_client_data(self.user['cliente'])
         self.objectives = self._parse_dataframe(df)
         self.is_dirty = False
 
     def save(self):
         df = self.to_dataframe()
-        db_manager.sync_data(df, self.user['cliente'])
-        self.is_dirty = False
-        ui.notify("Dados salvos com segurança!", type="positive", color=BRAND['lime'], text_color=BRAND['dark'])
+        if db_manager.sync_data(df, self.user['cliente']):
+            self.is_dirty = False
+            ui.notify("Dados salvos com segurança no Cloud!", type="positive", color=BRAND['lime'], text_color=BRAND['dark'])
+        else:
+            ui.notify("Erro ao salvar! Verifique a conexão.", type="negative")
 
     def rename_department(self, old_name: str, new_name: str):
         if not new_name: return
@@ -197,7 +243,9 @@ class OKRState:
             
             kr = next((k for k in obj.krs if k.name == row['kr']), None)
             if not kr:
-                kr = KeyResult(name=row['kr'], target=float(row['alvo'] or 1.0), current=float(row['avanco'] or 0.0))
+                kr = KeyResult(name=row['kr'], 
+                             target=float(row['alvo'] or 1.0), 
+                             current=float(row['avanco'] or 0.0))
                 obj.krs.append(kr)
             
             if row['tarefa']:
@@ -242,7 +290,7 @@ class OKRState:
         depts = sorted(list(set(o.department for o in self.objectives)))
         return depts if depts else ["Geral"]
 
-# --- 4. COMPONENTES UI (DESIGN SYSTEM) ---
+# --- 4. COMPONENTES UI ---
 
 class UIComponents:
     @staticmethod
@@ -269,11 +317,11 @@ def login_page():
             app.storage.user.update({'authenticated': True, 'user_info': user})
             ui.navigate.to('/')
         else:
-            ui.notify("Login falhou", type="negative")
+            ui.notify("Usuário ou senha incorretos", type="negative")
 
     async def handle_register():
         if not all([reg_user.value, reg_pass.value, reg_name.value, reg_client.value]):
-            ui.notify("Preencha tudo", type="warning")
+            ui.notify("Todos os campos são obrigatórios", type="warning")
             return
         success, msg = db_manager.create_user(reg_user.value, reg_pass.value, reg_name.value, reg_client.value)
         if success:
@@ -283,7 +331,6 @@ def login_page():
             ui.notify(msg, type="negative")
 
     with ui.column().classes('absolute-center w-full max-w-md p-4'):
-        # Card de Login estilizado com a marca
         with ui.card().classes('w-full shadow-2xl p-8 border-t-4').style(f'border-top-color: {BRAND["primary"]}'):
             ui.label('OKR SaaS').classes('text-3xl font-black text-center mb-2').style(f'color: {BRAND["primary"]}')
             
@@ -302,9 +349,10 @@ def login_page():
                     ui.button('Entrar', on_click=handle_login).classes('w-full mt-8 font-bold text-white').style(f'background-color: {BRAND["primary"]}')
                 
                 with ui.tab_panel('Cadastro'):
-                    reg_name = ui.input('Nome').classes('w-full').props('outlined dense')
-                    reg_client = ui.input('Empresa').classes('w-full mt-2').props('outlined dense')
-                    reg_user = ui.input('Usuário').classes('w-full mt-2').props('outlined dense')
+                    ui.label('Crie um acesso para seu Cliente').classes('text-xs text-slate-400 mb-2')
+                    reg_name = ui.input('Nome Completo').classes('w-full').props('outlined dense')
+                    reg_client = ui.input('Nome da Empresa (Chave)').classes('w-full mt-2').props('outlined dense')
+                    reg_user = ui.input('Login / Email').classes('w-full mt-2').props('outlined dense')
                     reg_pass = ui.input('Senha', password=True).classes('w-full mt-2').props('outlined dense')
                     with reg_pass.add_slot('append'):
                         ui.icon('visibility').on('click', lambda: reg_pass.props(
@@ -322,7 +370,6 @@ def render_management(state: OKRState):
             ui.button('Novo Objetivo', icon='add', on_click=lambda: add_obj_dialog.open()).props('rounded elevated').style(f'background-color: {BRAND["primary"]}; color: white')
             ui.button('Departamentos', icon='edit', on_click=lambda: dept_dialog.open()).props('flat').style(f'color: {BRAND["secondary"]}')
 
-    # Dialogs (Mantidos, apenas estilizados)
     with ui.dialog() as add_obj_dialog, ui.card().classes('w-96'):
         ui.label('Novo Objetivo').classes('text-lg font-bold mb-4').style(f'color: {BRAND["dark"]}')
         d_sel = ui.select(depts, label="Departamento", value=depts[0]).classes('w-full')
@@ -336,7 +383,6 @@ def render_management(state: OKRState):
                     render_management.refresh()
             ui.button('Criar', on_click=confirm_add).props('elevated').style(f'background-color: {BRAND["primary"]}; color: white')
 
-    # Dialog Avançado Departamentos
     with ui.dialog() as dept_dialog, ui.card().classes('w-[500px] h-[400px] p-0'):
         with ui.column().classes('w-full h-full'):
             ui.label('Gerenciar Departamentos').classes('text-lg font-bold p-4 border-b w-full')
@@ -361,7 +407,6 @@ def render_management(state: OKRState):
                         render_management.refresh()
                 ui.button('Adicionar', icon='add', on_click=create_d).style(f'background-color: {BRAND["primary"]}; color: white')
 
-    # ABAS
     with ui.tabs().classes('w-full border-b border-slate-200').props(f'active-color={BRAND["primary"]} indicator-color={BRAND["primary"]}') as tabs:
         for d in depts: ui.tab(d)
 
@@ -373,22 +418,15 @@ def render_management(state: OKRState):
                 
                 for obj in objs:
                     with UIComponents.card_container().classes('mb-6'):
-                        # Objetivo
                         with ui.row().classes('w-full items-center gap-4'):
                             ui.input().bind_value(obj, 'name').on('blur', state.mark_dirty).classes('text-lg font-bold flex-grow').props('borderless dense')
-                            
-                            # Knob Progresso
                             ui.knob(obj.progress, show_value=False, size='32px', track_color='grey-3').props(f'readonly color={BRAND["primary"]}')
                             ui.label().bind_text_from(obj, 'progress', lambda p: f"{p*100:.0f}%").classes('font-black text-xl').style(f'color: {BRAND["primary"]}')
-                            
                             with ui.button(icon='more_vert').props('flat round'):
                                 with ui.menu():
                                     with ui.menu_item(on_click=lambda o=obj: (state.remove_objective(o), render_management.refresh())):
                                         ui.label('Excluir').classes('text-red-500')
                         
-                        # -- REMOVIDA A BARRA DE PROGRESSO COMPRIDA DAQUI --
-                        
-                        # KRs
                         with ui.column().classes('w-full mt-4 gap-2'):
                             for kr in obj.krs:
                                 with ui.expansion().classes('w-full border border-slate-100 rounded').style(f'background-color: {BRAND["gray_light"]}') as exp:
@@ -400,28 +438,23 @@ def render_management(state: OKRState):
                                             ui.knob(kr.progress, show_value=False, size='24px', track_color='grey-3').props(f'readonly color={BRAND["secondary"]}')
                                     
                                     with ui.column().classes('w-full p-4 bg-white gap-4'):
-                                        # Métricas KR
                                         with ui.row().classes('w-full gap-4 items-center'):
                                             ui.input('Descrição do KR').bind_value(kr, 'name').on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense')
                                             ui.number('Atual').bind_value(kr, 'current').on('blur', state.mark_dirty).on('change', lambda: render_management.refresh()).classes('w-24').props('outlined dense')
                                             ui.number('Meta').bind_value(kr, 'target').on('blur', state.mark_dirty).on('change', lambda: render_management.refresh()).classes('w-24').props('outlined dense')
                                             ui.button(icon='delete', on_click=lambda k=kr, o=obj: (o.krs.remove(k), state.mark_dirty(), render_management.refresh())).props('flat round color=red')
                                     
-                                        # Tarefas
                                         ui.separator()
                                         ui.label('Plano de Ação').classes('text-xs font-bold text-slate-400 uppercase tracking-widest')
                                         for task in kr.tasks:
                                             with ui.row().classes('w-full items-center gap-2 p-2 rounded border border-slate-100').style(f'background-color: {BRAND["gray_light"]}'):
-                                                # Descrição
                                                 ui.input().bind_value(task, 'description').on('blur', state.mark_dirty).classes('flex-grow').props('borderless dense placeholder="O que fazer?"')
                                                 
-                                                # MÉTRICAS DE TAREFA (SEM BARRA VISUAL)
                                                 with ui.row().classes('items-center gap-1 bg-white px-2 rounded border border-slate-200'):
                                                     ui.number().bind_value(task, 'current').on('blur', state.mark_dirty).props('borderless dense style="width: 45px" placeholder="Real"')
                                                     ui.label('/').classes('text-slate-400')
                                                     ui.number().bind_value(task, 'target').on('blur', state.mark_dirty).props('borderless dense style="width: 45px" placeholder="Meta"')
 
-                                                # Status Customizado
                                                 def get_status_props(s):
                                                     conf = STATUS_CONFIG.get(s, STATUS_CONFIG["Não Iniciado"])
                                                     txt_color = conf.get("text_color", conf["color"])
@@ -430,7 +463,6 @@ def render_management(state: OKRState):
                                                 s_sel = ui.select(list(STATUS_CONFIG.keys()), value=task.status).bind_value(task, 'status').on_value_change(state.mark_dirty)
                                                 s_sel.classes('w-36').props('borderless dense options-dense')
                                                 
-                                                # Prazo
                                                 with ui.input().bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-28').props('borderless dense placeholder="Prazo"') as d:
                                                     with d.add_slot('append'):
                                                         ui.icon('calendar_today').on('click', lambda: date_menu.open()).classes('cursor-pointer text-xs text-slate-400')
@@ -454,7 +486,6 @@ def render_dashboard(state: OKRState):
     df_krs = df[df['kr'] != ''].copy()
     df_krs['pct'] = np.clip(df_krs['avanco'] / df_krs['alvo'].replace(0, 1), 0, 1)
     
-    # KPIs
     with ui.row().classes('w-full gap-4 mb-8'):
         def kpi_card(title, value, color):
             with ui.card().classes('flex-grow p-6 items-center border-b-4').style(f'border-bottom-color: {color}'):
@@ -465,7 +496,6 @@ def render_dashboard(state: OKRState):
         kpi_card('KRs Concluídos', f"{len(df_krs[df_krs['pct'] >= 1])}", BRAND['lime'])
         kpi_card('Ações Totais', str(len(df)), BRAND['secondary'])
 
-    # Gráficos
     with ui.row().classes('w-full gap-4'):
         with ui.card().classes('flex-grow p-4 h-96'):
             ui.label('Status').classes('font-bold mb-4')
@@ -496,7 +526,6 @@ def main_page():
 
     state = OKRState(user_info)
 
-    # Configuração de Cores Globais do NiceGUI
     ui.colors(primary=BRAND['primary'], secondary=BRAND['secondary'], accent=BRAND['lime'], positive=BRAND['lime'])
 
     with ui.header().classes('bg-white border-b border-slate-200 text-slate-800 p-4 justify-between items-center'):
@@ -506,7 +535,6 @@ def main_page():
             ui.badge(user_info['cliente']).style(f'background-color: {BRAND["lavender"]}; color: {BRAND["dark"]}')
         
         with ui.row().classes('items-center gap-4'):
-            # BOTÃO SALVAR (Visualização Garantida)
             save_btn = ui.button('Salvar', icon='save', on_click=state.save)
             save_btn.style(f'background-color: {BRAND["lime"]}; color: black; font-weight: bold;')
             save_btn.bind_visibility_from(state, 'is_dirty')
