@@ -385,7 +385,7 @@ def login_page():
         with ui.card().classes('w-full shadow-lg rounded-xl overflow-hidden'):
             # AJUSTE 2: Alinhamento vertical corrigido - adicionado 'justify-center' na coluna
             with ui.column().classes('w-full p-8 items-center justify-center bg-white'):
-                ui.label('OKR Manager').classes('text-3xl font-black').style(f'color: {BRAND["primary"]}')
+                ui.label('Gestão de OKR').classes('text-3xl font-black').style(f'color: {BRAND["primary"]}')
                 ui.label('Gestão estratégica de objetivos').classes('text-sm mt-1').style(f'color: {BRAND["text_light"]}')
             
             with ui.column().classes('p-8'):
@@ -805,7 +805,7 @@ def main_page():
         with ui.row().classes('w-full max-w-7xl mx-auto items-center justify-between'):
             with ui.row().classes('items-center gap-4'):
                 ui.button(icon='menu', on_click=lambda: drawer.toggle()).props('flat round')
-                ui.label('OKR Manager').classes('text-xl font-bold').style(f'color: {BRAND["primary"]}')
+                ui.label('Gestão de OKR').classes('text-xl font-bold').style(f'color: {BRAND["primary"]}')
                 ui.separator().props('vertical').classes('h-6')
                 ui.badge(user_info['cliente'], color='transparent').classes('text-xs px-3 py-1 rounded-full').style(
                     f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text"]}'
@@ -872,10 +872,11 @@ def main_page():
 # --- 7. INICIALIZAÇÃO ---
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
-        title="OKR Manager",
+        title="Gestão de OKR",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8080)),
         storage_secret=os.getenv("STORAGE_SECRET", "super-secret-key-123"),
         language="pt-BR",
         favicon="🎯"
     )
+
