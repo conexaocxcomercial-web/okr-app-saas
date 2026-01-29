@@ -201,6 +201,7 @@ class OKRState:
         self.user = user_info
         self.objectives: List[Objective] = []
         self.is_dirty: bool = False
+        self.selected_department: str = "Geral" # Nova propriedade para memória
         self.load()
 
     def mark_dirty(self):
@@ -210,6 +211,11 @@ class OKRState:
         df = db_manager.load_client_data(self.user['cliente'])
         self.objectives = self._parse_dataframe(df)
         self.is_dirty = False
+        
+        # Garante que o departamento selecionado ainda existe
+        depts = self.get_departments()
+        if self.selected_department not in depts and depts:
+            self.selected_department = depts[0]
 
     def save(self):
         df = self.to_dataframe()
@@ -227,6 +233,11 @@ class OKRState:
             if obj.department == old_name:
                 obj.department = new_name
                 changed = True
+        
+        # Atualiza a seleção se for o departamento atual
+        if self.selected_department == old_name:
+            self.selected_department = new_name
+            
         if changed: self.mark_dirty()
 
     def delete_department(self, dept_name: str):
@@ -234,6 +245,10 @@ class OKRState:
         self.objectives = [obj for obj in self.objectives if obj.department != dept_name]
         if len(self.objectives) < initial_len:
             self.mark_dirty()
+            # Se deletou o atual, volta para o primeiro ou Geral
+            if self.selected_department == dept_name:
+                depts = self.get_departments()
+                self.selected_department = depts[0] if depts else "Geral"
 
     def _parse_dataframe(self, df: pd.DataFrame) -> List[Objective]:
         if df.empty: return []
@@ -281,6 +296,8 @@ class OKRState:
 
     def add_objective(self, department: str, name: str):
         self.objectives.append(Objective(department=department, name=name))
+        # Muda para o departamento onde criou o objetivo
+        self.selected_department = department
         self.mark_dirty()
 
     def remove_objective(self, obj: Objective):
@@ -444,7 +461,7 @@ def render_management(state: OKRState):
                 ui.button(icon='close', on_click=add_obj_dialog.close).props('flat round dense')
             
             with ui.column().classes('p-6 gap-4'):
-                d_sel = ui.select(depts, label="Departamento", value=depts[0]).classes('w-full').props('outlined')
+                d_sel = ui.select(depts, label="Departamento", value=state.selected_department if state.selected_department in depts else depts[0]).classes('w-full').props('outlined')
                 o_name = ui.input("Nome do objetivo", placeholder="Ex: Aumentar satisfação dos clientes").classes('w-full').props('outlined')
                 
                 with ui.row().classes('w-full justify-end gap-2 mt-4'):
@@ -516,15 +533,19 @@ def render_management(state: OKRState):
                     f'background-color: {BRAND["primary"]}; color: white; font-weight: 600;'
                 ).props('no-caps unelevated')
 
-    # Tabs simplificadas
+    # CORREÇÃO: Tabs agora vinculadas ao estado
+    # Se o departamento selecionado não existir mais, volta para o primeiro
+    if state.selected_department not in depts and depts:
+        state.selected_department = depts[0]
+
     with ui.tabs().classes('w-full mb-6').props(
         f'active-color={BRAND["primary"]} indicator-color={BRAND["primary"]} dense'
-    ) as tabs:
+    ).bind_value(state, 'selected_department') as tabs:
         for d in depts: 
             ui.tab(d, icon='folder')
 
-    # Conteúdo dos departamentos
-    with ui.tab_panels(tabs, value=depts[0]).classes('w-full bg-transparent'):
+    # Painéis vinculados ao estado
+    with ui.tab_panels(tabs, value=state.selected_department).bind_value(state, 'selected_department').classes('w-full bg-transparent'):
         for dept in depts:
             with ui.tab_panel(dept).classes('p-0'):
                 objs = [o for o in state.objectives if o.department == dept]
@@ -540,17 +561,16 @@ def render_management(state: OKRState):
                 else:
                     with ui.column().classes('w-full gap-6'):
                         for obj in objs:
-                            # Card do objetivo - hierarquia clara sem excessos
+                            # Card do objetivo
                             with UIComponents.card_container(elevated=True):
-                                # Header do objetivo - NÍVEL 1
+                                # Header do objetivo
                                 with ui.row().classes('w-full items-start gap-4 pb-5 border-b').style(
                                     f'border-color: {BRAND["border"]}'
                                 ):
                                     with ui.column().classes('flex-grow gap-2'):
                                         with ui.row().classes('items-center gap-2 w-full'):
                                             ui.icon('flag', size='sm').style(f'color: {BRAND["primary"]}')
-                                            # MUDANÇA: Substituído ui.input por ui.textarea para permitir quebra de linha
-                                            # Adicionado 'autogrow' para crescer automaticamente e 'rows=1' para começar pequeno
+                                            # Mantido o Textarea para textos longos
                                             ui.textarea().bind_value(obj, 'name').on('blur', state.mark_dirty).classes(
                                                 'text-xl font-bold flex-grow'
                                             ).props('borderless dense autogrow rows=1').style(f'color: {BRAND["text"]}; resize: none;')
@@ -577,7 +597,7 @@ def render_management(state: OKRState):
                                                     ui.icon('delete_outline', size='sm').style(f'color: {BRAND["error"]}')
                                                     ui.label('Excluir').style(f'color: {BRAND["error"]}')
                                 
-                                # Key Results - NÍVEL 2
+                                # Key Results
                                 if not obj.krs:
                                     with ui.column().classes('w-full items-center py-10'):
                                         ui.icon('analytics', size='lg').classes('opacity-20').style(f'color: {BRAND["text_light"]}')
@@ -632,7 +652,7 @@ def render_management(state: OKRState):
                                                     
                                                     ui.separator()
                                                     
-                                                    # Plano de ação - NÍVEL 3
+                                                    # Plano de ação
                                                     with ui.row().classes('w-full items-center justify-between mb-3'):
                                                         ui.label('Plano de Ação').classes('text-sm font-semibold').style(f'color: {BRAND["text"]}')
                                                         ui.label(f'{len(kr.tasks)} tarefas').classes('text-xs px-2 py-1 rounded').style(
@@ -650,7 +670,7 @@ def render_management(state: OKRState):
                                                             for task in kr.tasks:
                                                                 status_conf = STATUS_CONFIG.get(task.status, STATUS_CONFIG["Não Iniciado"])
                                                                 
-                                                                # Card de tarefa - visual leve
+                                                                # Card de tarefa
                                                                 with ui.card().classes('w-full p-4 rounded-lg border').style(
                                                                     f'background-color: {status_conf["bg"]}; border-color: {BRAND["border"]}'
                                                                 ):
@@ -710,7 +730,7 @@ def render_dashboard(state: OKRState):
     df_krs = df[df['kr'] != ''].copy()
     df_krs['pct'] = np.clip(df_krs['avanco'] / df_krs['alvo'].replace(0, 1), 0, 1)
     
-    # KPIs simplificados - mais executivos
+    # KPIs simplificados
     with ui.row().classes('w-full gap-4 mb-8'):
         def kpi_card(title, value, subtitle, icon, color):
             with ui.card().classes('flex-1 p-6 rounded-xl border').style(
@@ -731,7 +751,7 @@ def render_dashboard(state: OKRState):
         kpi_card('Taxa de Conclusão', f"{completed}/{total_krs}", f'{(completed/total_krs*100):.0f}% completos', 'check_circle', BRAND['success'])
         kpi_card('Em Execução', str(in_progress), 'Tarefas ativas', 'pending_actions', BRAND['secondary'])
 
-    # Gráficos limpos
+    # Gráficos
     with ui.row().classes('w-full gap-4 mb-6'):
         with UIComponents.card_container(elevated=True).classes('flex-1 h-[380px]'):
             with ui.column().classes('w-full h-full gap-3'):
@@ -800,7 +820,7 @@ def main_page():
 
     ui.colors(primary=BRAND['primary'], secondary=BRAND['secondary'], accent=BRAND['accent'], positive=BRAND['success'])
 
-    # Header limpo
+    # Header
     with ui.header().classes('bg-white shadow-sm px-6 py-4').style(f'border-bottom: 1px solid {BRAND["border"]}'):
         with ui.row().classes('w-full max-w-7xl mx-auto items-center justify-between'):
             with ui.row().classes('items-center gap-4'):
@@ -812,7 +832,6 @@ def main_page():
                 )
             
             with ui.row().classes('items-center gap-3'):
-                # Indicador de não salvo mais visível
                 save_btn = ui.button('Salvar', icon='save', on_click=state.save)
                 save_btn.style(
                     f'background-color: {BRAND["success"]}; color: white; font-weight: 600;'
@@ -835,7 +854,7 @@ def main_page():
                                     ui.icon('logout', size='sm').style(f'color: {BRAND["error"]}')
                                     ui.label('Sair').style(f'color: {BRAND["error"]}')
 
-    # Drawer limpo
+    # Drawer
     with ui.left_drawer(value=True).classes('p-0').style(
         f'background-color: white; border-right: 1px solid {BRAND["border"]}; width: 260px;'
     ) as drawer:
