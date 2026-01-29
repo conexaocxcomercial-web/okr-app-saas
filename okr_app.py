@@ -383,7 +383,6 @@ def login_page():
 
     with ui.column().classes('absolute-center w-full max-w-md px-6'):
         with ui.card().classes('w-full shadow-lg rounded-xl overflow-hidden'):
-            # AJUSTE 2: Alinhamento vertical corrigido - adicionado 'justify-center' na coluna
             with ui.column().classes('w-full p-8 items-center justify-center bg-white'):
                 ui.label('Gestão de OKR').classes('text-3xl font-black').style(f'color: {BRAND["primary"]}')
                 ui.label('Gestão estratégica de objetivos').classes('text-sm mt-1').style(f'color: {BRAND["text_light"]}')
@@ -548,11 +547,14 @@ def render_management(state: OKRState):
                                     f'border-color: {BRAND["border"]}'
                                 ):
                                     with ui.column().classes('flex-grow gap-2'):
-                                        with ui.row().classes('items-center gap-2'):
+                                        with ui.row().classes('items-center gap-2 w-full'):
                                             ui.icon('flag', size='sm').style(f'color: {BRAND["primary"]}')
-                                            ui.input().bind_value(obj, 'name').on('blur', state.mark_dirty).classes(
+                                            # MUDANÇA: Substituído ui.input por ui.textarea para permitir quebra de linha
+                                            # Adicionado 'autogrow' para crescer automaticamente e 'rows=1' para começar pequeno
+                                            ui.textarea().bind_value(obj, 'name').on('blur', state.mark_dirty).classes(
                                                 'text-xl font-bold flex-grow'
-                                            ).props('borderless dense').style(f'color: {BRAND["text"]}')
+                                            ).props('borderless dense autogrow rows=1').style(f'color: {BRAND["text"]}; resize: none;')
+                                            
                                         with ui.row().classes('items-center gap-3 ml-7'):
                                             ui.label(f'{len(obj.krs)} KRs').classes('text-xs px-2 py-1 rounded').style(
                                                 f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text_light"]}'
@@ -668,8 +670,6 @@ def render_management(state: OKRState):
                                                                         
                                                                         ui.input(placeholder='Responsável', label='Responsável').bind_value(task, 'responsible').on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
 
-                                                                        # AJUSTE 1: Corrigido - removido ícone event duplicado no slot append
-                                                                        # O menu de data agora abre apenas ao clicar no input, sem duplicação
                                                                         deadline_input = ui.input(placeholder='dd/mm/aaaa', label='Prazo').bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
                                                                         with deadline_input:
                                                                             with ui.menu() as date_menu:
@@ -879,4 +879,3 @@ if __name__ in {"__main__", "__mp_main__"}:
         language="pt-BR",
         favicon="🎯"
     )
-
