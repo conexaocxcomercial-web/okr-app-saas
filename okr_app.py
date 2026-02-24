@@ -160,28 +160,28 @@ class DatabaseManager:
                         {"ids": list(to_delete)}
                     )
 
-                # Upsert (insert or update)
-                for row in df.to_dict(orient='records'):
-                    s.execute(
-                        text("""
-                            INSERT INTO okr_data
-                                (id, cliente, departamento, objetivo, kr, tarefa, status, responsavel, prazo, avanco, alvo)
-                            VALUES
-                                (:id, :cliente, :departamento, :objetivo, :kr, :tarefa, :status, :responsavel, :prazo, :avanco, :alvo)
-                            ON CONFLICT (id) DO UPDATE SET
-                                cliente      = EXCLUDED.cliente,
-                                departamento = EXCLUDED.departamento,
-                                objetivo     = EXCLUDED.objetivo,
-                                kr           = EXCLUDED.kr,
-                                tarefa       = EXCLUDED.tarefa,
-                                status       = EXCLUDED.status,
-                                responsavel  = EXCLUDED.responsavel,
-                                prazo        = EXCLUDED.prazo,
-                                avanco       = EXCLUDED.avanco,
-                                alvo         = EXCLUDED.alvo
-                        """),
-                        row
-                    )
+                # Upsert em batch (muito mais rápido que row-by-row)
+                records = df.to_dict(orient='records')
+                s.execute(
+                    text("""
+                        INSERT INTO okr_data
+                            (id, cliente, departamento, objetivo, kr, tarefa, status, responsavel, prazo, avanco, alvo)
+                        VALUES
+                            (:id, :cliente, :departamento, :objetivo, :kr, :tarefa, :status, :responsavel, :prazo, :avanco, :alvo)
+                        ON CONFLICT (id) DO UPDATE SET
+                            cliente      = EXCLUDED.cliente,
+                            departamento = EXCLUDED.departamento,
+                            objetivo     = EXCLUDED.objetivo,
+                            kr           = EXCLUDED.kr,
+                            tarefa       = EXCLUDED.tarefa,
+                            status       = EXCLUDED.status,
+                            responsavel  = EXCLUDED.responsavel,
+                            prazo        = EXCLUDED.prazo,
+                            avanco       = EXCLUDED.avanco,
+                            alvo         = EXCLUDED.alvo
+                    """),
+                    records
+                )
 
                 s.commit()
                 return True
@@ -496,85 +496,98 @@ def render_obj_progress(obj: Objective):
 
 @ui.refreshable
 def render_task_list(kr: KeyResult, state: OKRState):
-    """Renderiza apenas as tarefas de um KR — sem tocar em mais nada."""
+    """Renderiza apenas as tarefas de um KR."""
+
+    def build_task_card(container, task: Task):
+        """Constrói um único card de tarefa dentro do container."""
+        sc = STATUS_CONFIG.get(task.status, STATUS_CONFIG["Não Iniciado"])
+        with container:
+            with ui.card().classes('w-full p-4 rounded-lg border task-card').style(
+                f'background-color: {sc["bg"]}; border-color: {BRAND["border"]}'
+            ) as card:
+                with ui.row().classes('w-full items-center gap-3 flex-wrap'):
+                    status_icon = ui.icon(sc["icon"], size='sm').style(f'color: {sc["color"]}')
+
+                    ui.input(placeholder='Descrever tarefa...').bind_value(
+                        task, 'description'
+                    ).on('blur', state.mark_dirty).classes('flex-grow min-w-40').props(
+                        'borderless dense'
+                    ).style(f'color: {BRAND["text"]}; font-weight: 500')
+
+                    def make_status_handler(t: Task, k: KeyResult, icon_el, card_el):
+                        def on_status_change(e):
+                            t.status = e.value
+                            state.mark_dirty()
+                            new_sc = STATUS_CONFIG.get(e.value, STATUS_CONFIG["Não Iniciado"])
+                            # Atualiza apenas ícone e cor do card — sem rebuild
+                            icon_el.props(f'name={new_sc["icon"]}')
+                            icon_el.style(f'color: {new_sc["color"]}')
+                            card_el.style(f'background-color: {new_sc["bg"]}; border-color: {BRAND["border"]}')
+                            # Progresso não muda com status de tarefa, então não precisa refresh
+                        return on_status_change
+
+                    s_sel = ui.select(
+                        list(STATUS_CONFIG.keys()),
+                        value=task.status,
+                        label='Status'
+                    ).classes('w-40').props('outlined dense bg-white')
+                    s_sel.on_value_change(make_status_handler(task, kr, status_icon, card))
+
+                    ui.input(placeholder='Responsável', label='Responsável').bind_value(
+                        task, 'responsible'
+                    ).on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
+
+                    deadline_input = ui.input(
+                        placeholder='dd/mm/aaaa', label='Prazo'
+                    ).bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-36').props(
+                        'outlined dense bg-white'
+                    )
+                    with deadline_input:
+                        with ui.menu() as date_menu:
+                            ui.date().bind_value(deadline_input).on_value_change(
+                                lambda: (date_menu.close(), state.mark_dirty())
+                            )
+                    deadline_input.on('click', date_menu.open)
+
+                    def make_delete_task(t: Task, k: KeyResult, c):
+                        def do_delete():
+                            k.tasks.remove(t)
+                            state.mark_dirty()
+                            c.delete()  # remove só esse card do DOM
+                            obj = next((o for o in state.objectives if k in o.krs), None)
+                            if obj:
+                                render_obj_progress.refresh(obj)
+                            render_kr_progress_header.refresh(k)
+                        return do_delete
+
+                    ui.button(icon='close', on_click=make_delete_task(task, kr, card)).props(
+                        'flat round dense'
+                    ).style(f'color: {BRAND["error"]}')
+
+    task_container = ui.column().classes('w-full gap-2')
+
     if not kr.tasks:
-        with ui.column().classes('w-full items-center py-8 rounded-lg').style(
-            f'background-color: {BRAND["bg_subtle"]}'
-        ):
-            ui.icon('task_alt', size='md').classes('opacity-20').style(f'color: {BRAND["text_light"]}')
-            ui.label('Nenhuma tarefa').classes('text-sm mt-2').style(f'color: {BRAND["text_light"]}')
+        with task_container:
+            with ui.column().classes('w-full items-center py-8 rounded-lg empty-state-tasks').style(
+                f'background-color: {BRAND["bg_subtle"]}'
+            ):
+                ui.icon('task_alt', size='md').classes('opacity-20').style(f'color: {BRAND["text_light"]}')
+                ui.label('Nenhuma tarefa').classes('text-sm mt-2').style(f'color: {BRAND["text_light"]}')
     else:
-        with ui.column().classes('w-full gap-2'):
-            for task in kr.tasks:
-                sc = STATUS_CONFIG.get(task.status, STATUS_CONFIG["Não Iniciado"])
-                with ui.card().classes('w-full p-4 rounded-lg border').style(
-                    f'background-color: {sc["bg"]}; border-color: {BRAND["border"]}'
-                ):
-                    with ui.row().classes('w-full items-center gap-3 flex-wrap'):
-                        ui.icon(sc["icon"], size='sm').style(f'color: {sc["color"]}')
+        for task in kr.tasks:
+            build_task_card(task_container, task)
 
-                        ui.input(placeholder='Descrever tarefa...').bind_value(
-                            task, 'description'
-                        ).on('blur', state.mark_dirty).classes('flex-grow min-w-40').props(
-                            'borderless dense'
-                        ).style(f'color: {BRAND["text"]}; font-weight: 500')
-
-                        def make_status_handler(t: Task, k: KeyResult):
-                            def on_status_change(e):
-                                t.status = e.value
-                                state.mark_dirty()
-                                # Atualiza só a lista de tarefas e o progresso — não o mundo todo
-                                render_task_list.refresh(k, state)
-                                render_kr_progress_header.refresh(k)
-                                render_obj_progress.refresh(
-                                    next((o for o in state.objectives if k in o.krs), None)
-                                    or state.objectives[0]
-                                )
-                            return on_status_change
-
-                        s_sel = ui.select(
-                            list(STATUS_CONFIG.keys()),
-                            value=task.status,
-                            label='Status'
-                        ).classes('w-40').props('outlined dense bg-white')
-                        s_sel.on_value_change(make_status_handler(task, kr))
-
-                        ui.input(placeholder='Responsável', label='Responsável').bind_value(
-                            task, 'responsible'
-                        ).on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
-
-                        deadline_input = ui.input(
-                            placeholder='dd/mm/aaaa', label='Prazo'
-                        ).bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-36').props(
-                            'outlined dense bg-white'
-                        )
-                        with deadline_input:
-                            with ui.menu() as date_menu:
-                                ui.date().bind_value(deadline_input).on_value_change(
-                                    lambda: (date_menu.close(), state.mark_dirty())
-                                )
-                        deadline_input.on('click', date_menu.open)
-
-                        def make_delete_task(t: Task, k: KeyResult):
-                            def do_delete():
-                                k.tasks.remove(t)
-                                state.mark_dirty()
-                                render_task_list.refresh(k, state)
-                                obj = next((o for o in state.objectives if k in o.krs), None)
-                                if obj:
-                                    render_obj_progress.refresh(obj)
-                                render_kr_progress_header.refresh(k)
-                            return do_delete
-
-                        ui.button(icon='close', on_click=make_delete_task(task, kr)).props(
-                            'flat round dense'
-                        ).style(f'color: {BRAND["error"]}')
-
-    # Botão adicionar tarefa sempre visível abaixo da lista
+    # Botão adicionar: injeta card diretamente no container, sem rebuild
     def add_task():
-        kr.tasks.append(Task())
+        # Remove empty state se existir
+        for child in list(task_container):
+            if hasattr(child, '_classes') and 'empty-state-tasks' in (child._classes or ''):
+                child.delete()
+
+        new_task = Task()
+        kr.tasks.append(new_task)
         state.mark_dirty()
-        render_task_list.refresh(kr, state)
+        build_task_card(task_container, new_task)
 
     ui.button('Adicionar tarefa', icon='add_task', on_click=add_task).props('flat').classes(
         'w-full mt-2'
@@ -642,23 +655,27 @@ def render_kr_list(obj: Objective, state: OKRState):
                                 kr, 'name'
                             ).on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense bg-white')
 
-                            def make_number_handler(k: KeyResult, o: Objective, field: str):
-                                def on_change(e):
-                                    setattr(k, field, float(e.value or 0))
+                            def make_number_handler(k: KeyResult, o: Objective, attr: str):
+                                def on_blur(e):
+                                    try:
+                                        val = float(e.sender.value or 0)
+                                    except (ValueError, TypeError):
+                                        val = 0.0
+                                    setattr(k, attr, val)
                                     state.mark_dirty()
                                     render_kr_progress_header.refresh(k)
                                     render_obj_progress.refresh(o)
-                                return on_change
+                                return on_blur
 
                             ui.number('Atual', min=0, step=0.1).bind_value(
                                 kr, 'current'
-                            ).on('update:model-value', make_number_handler(kr, obj, 'current')).classes(
+                            ).on('blur', make_number_handler(kr, obj, 'current')).classes(
                                 'w-28'
                             ).props('outlined dense bg-white')
 
                             ui.number('Meta', min=0, step=0.1).bind_value(
                                 kr, 'target'
-                            ).on('update:model-value', make_number_handler(kr, obj, 'target')).classes(
+                            ).on('blur', make_number_handler(kr, obj, 'target')).classes(
                                 'w-28'
                             ).props('outlined dense bg-white')
 
