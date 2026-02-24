@@ -608,88 +608,92 @@ def render_kr_list(obj: Objective, state: OKRState):
 
     with ui.column().classes('w-full mt-5 gap-3'):
         for kr in obj.krs:
-            with ui.expansion().classes('w-full rounded-lg overflow-hidden border').style(
-                f'background-color: {BRAND["bg_subtle"]}; border-color: {BRAND["border"]}'
-            ) as exp:
-                exp.bind_value(kr, 'expanded')
+            # Captura explícita do kr atual para evitar closure bug em loops
+            def build_kr_block(k: KeyResult, o: Objective):
+                with ui.expansion().classes('w-full rounded-lg overflow-hidden border').style(
+                    f'background-color: {BRAND["bg_subtle"]}; border-color: {BRAND["border"]}'
+                ) as exp:
+                    exp.bind_value(k, 'expanded')
 
-                with exp.add_slot('header'):
-                    with ui.row().classes('w-full items-center gap-3 px-2'):
-                        ui.icon('show_chart', size='sm').style(f'color: {BRAND["secondary"]}')
-                        ui.label().bind_text_from(kr, 'name', lambda n: n or 'Sem nome').classes(
-                            'font-semibold flex-grow'
-                        ).style(f'color: {BRAND["text"]}')
-                        with ui.row().classes('items-center gap-3'):
+                    with exp.add_slot('header'):
+                        with ui.row().classes('w-full items-center gap-3 px-2'):
+                            ui.icon('show_chart', size='sm').style(f'color: {BRAND["secondary"]}')
+                            ui.label().bind_text_from(k, 'name', lambda n: n or 'Sem nome').classes(
+                                'font-semibold flex-grow'
+                            ).style(f'color: {BRAND["text"]}')
+                            with ui.row().classes('items-center gap-3'):
+                                ui.label().bind_text_from(
+                                    k, 'current',
+                                    lambda c, _k=k: f"{c:.1f}/{_k.target:.1f}"
+                                ).classes('text-sm font-medium px-2 py-1 rounded').style(
+                                    f'background-color: white; color: {BRAND["text"]}'
+                                )
+                                render_kr_progress_header(k)
+
+                    with ui.column().classes('w-full p-5 bg-white gap-5'):
+                        # Configuração do KR
+                        with ui.card().classes('w-full p-4 border rounded-lg').style(
+                            f'border-color: {BRAND["border"]}; background-color: {BRAND["bg_subtle"]}'
+                        ):
+                            with ui.row().classes('items-center justify-between mb-3'):
+                                ui.label('Configuração').classes('text-xs font-semibold uppercase').style(
+                                    f'color: {BRAND["text_light"]}'
+                                )
+                                def make_delete_kr(k: KeyResult, o: Objective):
+                                    def do_delete():
+                                        o.krs.remove(k)
+                                        state.mark_dirty()
+                                        render_kr_list.refresh(o, state)
+                                        render_obj_progress.refresh(o)
+                                        ui.notify("Key Result excluído", type="info", position="top")
+                                    return do_delete
+
+                                ui.button(icon='delete_outline', on_click=make_delete_kr(k, o)).props(
+                                    'flat dense round'
+                                ).style(f'color: {BRAND["error"]}')
+
+                            with ui.row().classes('w-full gap-3 items-start'):
+                                ui.input('Nome', placeholder='Ex: Atingir NPS de 80').bind_value(
+                                    k, 'name'
+                                ).on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense bg-white')
+
+                                def make_number_handler(k: KeyResult, o: Objective, attr: str):
+                                    def on_blur(e):
+                                        try:
+                                            val = float(e.sender.value or 0)
+                                        except (ValueError, TypeError):
+                                            val = 0.0
+                                        setattr(k, attr, val)
+                                        state.mark_dirty()
+                                        render_kr_progress_header.refresh(k)
+                                        render_obj_progress.refresh(o)
+                                    return on_blur
+
+                                ui.number('Atual', min=0, step=0.1).bind_value(
+                                    k, 'current'
+                                ).on('blur', make_number_handler(k, o, 'current')).classes(
+                                    'w-28'
+                                ).props('outlined dense bg-white')
+
+                                ui.number('Meta', min=0, step=0.1).bind_value(
+                                    k, 'target'
+                                ).on('blur', make_number_handler(k, o, 'target')).classes(
+                                    'w-28'
+                                ).props('outlined dense bg-white')
+
+                        ui.separator()
+
+                        with ui.row().classes('w-full items-center justify-between mb-1'):
+                            ui.label('Plano de Ação').classes('text-sm font-semibold').style(f'color: {BRAND["text"]}')
                             ui.label().bind_text_from(
-                                kr, 'current',
-                                lambda c, k=kr: f"{c:.1f}/{k.target:.1f}"
-                            ).classes('text-sm font-medium px-2 py-1 rounded').style(
-                                f'background-color: white; color: {BRAND["text"]}'
+                                k, 'tasks', lambda t: f'{len(t)} tarefas'
+                            ).classes('text-xs px-2 py-1 rounded').style(
+                                f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text_light"]}'
                             )
-                            render_kr_progress_header(kr)
 
-                with ui.column().classes('w-full p-5 bg-white gap-5'):
-                    # Configuração do KR
-                    with ui.card().classes('w-full p-4 border rounded-lg').style(
-                        f'border-color: {BRAND["border"]}; background-color: {BRAND["bg_subtle"]}'
-                    ):
-                        with ui.row().classes('items-center justify-between mb-3'):
-                            ui.label('Configuração').classes('text-xs font-semibold uppercase').style(
-                                f'color: {BRAND["text_light"]}'
-                            )
-                            def make_delete_kr(k: KeyResult, o: Objective):
-                                def do_delete():
-                                    o.krs.remove(k)
-                                    state.mark_dirty()
-                                    render_kr_list.refresh(o, state)
-                                    render_obj_progress.refresh(o)
-                                    ui.notify("Key Result excluído", type="info", position="top")
-                                return do_delete
+                        render_task_list(k, state)
 
-                            ui.button(icon='delete_outline', on_click=make_delete_kr(kr, obj)).props(
-                                'flat dense round'
-                            ).style(f'color: {BRAND["error"]}')
-
-                        with ui.row().classes('w-full gap-3 items-start'):
-                            ui.input('Nome', placeholder='Ex: Atingir NPS de 80').bind_value(
-                                kr, 'name'
-                            ).on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense bg-white')
-
-                            def make_number_handler(k: KeyResult, o: Objective, attr: str):
-                                def on_blur(e):
-                                    try:
-                                        val = float(e.sender.value or 0)
-                                    except (ValueError, TypeError):
-                                        val = 0.0
-                                    setattr(k, attr, val)
-                                    state.mark_dirty()
-                                    render_kr_progress_header.refresh(k)
-                                    render_obj_progress.refresh(o)
-                                return on_blur
-
-                            ui.number('Atual', min=0, step=0.1).bind_value(
-                                kr, 'current'
-                            ).on('blur', make_number_handler(kr, obj, 'current')).classes(
-                                'w-28'
-                            ).props('outlined dense bg-white')
-
-                            ui.number('Meta', min=0, step=0.1).bind_value(
-                                kr, 'target'
-                            ).on('blur', make_number_handler(kr, obj, 'target')).classes(
-                                'w-28'
-                            ).props('outlined dense bg-white')
-
-                    ui.separator()
-
-                    with ui.row().classes('w-full items-center justify-between mb-1'):
-                        ui.label('Plano de Ação').classes('text-sm font-semibold').style(f'color: {BRAND["text"]}')
-                        ui.label().bind_text_from(
-                            kr, 'tasks', lambda t: f'{len(t)} tarefas'
-                        ).classes('text-xs px-2 py-1 rounded').style(
-                            f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text_light"]}'
-                        )
-
-                    render_task_list(kr, state)
+            build_kr_block(kr, obj)
 
         ui.button('Adicionar Key Result', icon='add_circle_outline', on_click=lambda: _add_kr(obj, state)).props(
             'flat'
@@ -718,16 +722,15 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
         return
 
     with ui.column().classes('w-full gap-6'):
-        for obj in objs:
+        def build_obj_block(o: Objective):
             with UIComponents.card_container(elevated=True):
-                # Header do objetivo
                 with ui.row().classes('w-full items-start gap-4 pb-5 border-b').style(
                     f'border-color: {BRAND["border"]}'
                 ):
                     with ui.column().classes('flex-grow gap-2'):
                         with ui.row().classes('items-center gap-2 w-full'):
                             ui.icon('flag', size='sm').style(f'color: {BRAND["primary"]}')
-                            ui.textarea().bind_value(obj, 'name').on(
+                            ui.textarea().bind_value(o, 'name').on(
                                 'blur', state.mark_dirty
                             ).classes('text-xl font-bold flex-grow').props(
                                 'borderless dense autogrow rows=1'
@@ -735,19 +738,19 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
 
                         with ui.row().classes('items-center gap-3 ml-7'):
                             ui.label().bind_text_from(
-                                obj, 'krs', lambda k: f'{len(k)} KRs'
+                                o, 'krs', lambda k: f'{len(k)} KRs'
                             ).classes('text-xs px-2 py-1 rounded').style(
                                 f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text_light"]}'
                             )
                             ui.label().bind_text_from(
-                                obj, 'krs',
+                                o, 'krs',
                                 lambda k: f'{sum(len(kr.tasks) for kr in k)} tarefas'
                             ).classes('text-xs px-2 py-1 rounded').style(
                                 f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text_light"]}'
                             )
 
                     with ui.column().classes('items-end gap-1'):
-                        render_obj_progress(obj)
+                        render_obj_progress(o)
 
                     with ui.button(icon='more_vert').props('flat round dense'):
                         with ui.menu():
@@ -758,13 +761,15 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
                                     ui.notify("Objetivo excluído", type="info", position="top")
                                 return do_delete
 
-                            with ui.menu_item(on_click=make_delete_obj(obj)):
+                            with ui.menu_item(on_click=make_delete_obj(o)):
                                 with ui.row().classes('items-center gap-2'):
                                     ui.icon('delete_outline', size='sm').style(f'color: {BRAND["error"]}')
                                     ui.label('Excluir').style(f'color: {BRAND["error"]}')
 
-                # KRs do objetivo
-                render_kr_list(obj, state)
+                render_kr_list(o, state)
+
+        for obj in objs:
+            build_obj_block(obj)
 
 
 @ui.refreshable
