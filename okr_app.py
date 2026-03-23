@@ -1,7 +1,9 @@
 import os
+import time
 from uuid import uuid4
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, Callable
 from dataclasses import dataclass, field
+from datetime import date, datetime
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, Column, String, Float, text
@@ -10,32 +12,50 @@ from nicegui import ui, app
 import plotly.express as px
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO ---
+# --- 1. CONFIGURAÇÃO E DEBUG ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Paleta simplificada e profissional
 BRAND = {
-    "primary": "#4f46e5",
-    "secondary": "#8b5cf6",
-    "accent": "#10b981",
-    "dark": "#0f172a",
-    "text": "#1e293b",
-    "text_light": "#64748b",
+    "primary": "#4f46e5",  # Indigo 600
+    "secondary": "#8b5cf6",  # Violet 500
+    "accent": "#10b981",  # Emerald 500
+    "dark": "#0f172a",  # Slate 900
+    "text": "#1e293b",  # Slate 800
+    "text_light": "#64748b",  # Slate 500
     "bg": "#ffffff",
-    "bg_subtle": "#f8fafc",
-    "border": "#e2e8f0",
+    "bg_subtle": "#f8fafc",  # Slate 50
+    "border": "#e2e8f0",  # Slate 200
     "success": "#10b981",
     "warning": "#f59e0b",
     "error": "#ef4444"
 }
 
+# Status simplificado e consistente
 STATUS_CONFIG = {
-    "Não Iniciado": {"color": "#ef4444", "icon": "radio_button_unchecked", "bg": "#fef2f2"},
-    "Em Andamento": {"color": "#3b82f6", "icon": "pending", "bg": "#eff6ff"},
-    "Pausado":       {"color": "#f59e0b", "icon": "pause_circle_outline", "bg": "#fffbeb"},
-    "Concluído":     {"color": "#10b981", "icon": "check_circle", "bg": "#f0fdf4"},
+    "Não Iniciado": {
+        "color": "#ef4444",
+        "icon": "radio_button_unchecked",
+        "bg": "#fef2f2"
+    },
+    "Em Andamento": {
+        "color": "#3b82f6",
+        "icon": "pending",
+        "bg": "#eff6ff"
+    },
+    "Pausado": {
+        "color": "#f59e0b",
+        "icon": "pause_circle_outline",
+        "bg": "#fffbeb"
+    },
+    "Concluído": {
+        "color": "#10b981",
+        "icon": "check_circle",
+        "bg": "#f0fdf4"
+    }
 }
 
-# --- 2. PERSISTÊNCIA ---
+# --- 2. PERSISTÊNCIA (ORM) ---
 Base = declarative_base()
 
 class UserDB(Base):
@@ -123,20 +143,14 @@ class DatabaseManager:
             return pd.DataFrame()
 
     def sync_data(self, df: pd.DataFrame, client: str) -> bool:
-        """
-        CORREÇÃO: usa UPSERT em vez de delete+insert total.
-        Deleta apenas IDs que sumiram e atualiza/insere os demais.
-        """
         try:
             with self.get_session() as s:
-                # IDs existentes no banco para esse cliente
                 existing_ids = set(
                     row[0] for row in
                     s.execute(text("SELECT id FROM okr_data WHERE cliente = :c"), {"c": client})
                 )
 
                 if df.empty:
-                    # Remove tudo
                     s.execute(text("DELETE FROM okr_data WHERE cliente = :c"), {"c": client})
                     s.commit()
                     return True
@@ -144,7 +158,6 @@ class DatabaseManager:
                 df = df.copy()
                 df['cliente'] = client
 
-                # Garante coluna id
                 if 'id' not in df.columns:
                     df['id'] = [str(uuid4()) for _ in range(len(df))]
                 else:
@@ -152,7 +165,6 @@ class DatabaseManager:
 
                 new_ids = set(df['id'].tolist())
 
-                # Deleta IDs que não existem mais
                 to_delete = existing_ids - new_ids
                 if to_delete:
                     s.execute(
@@ -160,7 +172,6 @@ class DatabaseManager:
                         {"ids": list(to_delete)}
                     )
 
-                # Upsert em batch (muito mais rápido que row-by-row)
                 records = df.to_dict(orient='records')
                 s.execute(
                     text("""
@@ -236,10 +247,11 @@ class OKRState:
         self.objectives: List[Objective] = []
         self.is_dirty:   bool   = False
         self.selected_department: str = "Geral"
-        self._df_cache: Optional[pd.DataFrame] = None  # cache do DF com IDs
+        self._df_cache: Optional[pd.DataFrame] = None 
         self.load()
 
-    def mark_dirty(self):
+    # CORREÇÃO PRINCIPAL: Permite que eventos de tela chamem a função sem gerar erro no servidor
+    def mark_dirty(self, *args, **kwargs):
         self.is_dirty = True
 
     def load(self):
@@ -302,9 +314,8 @@ class OKRState:
                     target=float(row['alvo'] or 1.0),
                     current=float(row['avanco'] or 0.0)
                 )
-                # Preserve ID from DB if available
                 if 'id' in row and row['id']:
-                    pass  # ID belongs to row, not KR directly
+                    pass 
                 obj.krs.append(kr)
             if row['tarefa']:
                 task = Task(
@@ -313,7 +324,6 @@ class OKRState:
                     responsible=row['responsavel'],
                     deadline=str(row['prazo'])
                 )
-                # Preserve task id if we can match
                 if 'id' in row and row['id']:
                     task.id = row['id']
                 kr.tasks.append(task)
@@ -393,7 +403,6 @@ class UIComponents:
 
     @staticmethod
     def progress_bar_inline(progress: float):
-        """Barra de progresso leve — não usa circular (mais leve na renderização)."""
         if progress >= 0.8:
             color = BRAND['success']
         elif progress >= 0.5:
@@ -483,11 +492,6 @@ def login_page():
 # ─────────────────────────────────────────────
 
 def make_progress_widget(get_progress_fn):
-    """
-    Cria um widget de progresso isolado por instância.
-    Retorna um callable `refresh()` que atualiza APENAS este widget,
-    sem afetar nenhum outro na página — elimina o bug de refresh global.
-    """
     def _color(p: float) -> str:
         if p >= 0.8: return BRAND['success']
         if p >= 0.5: return BRAND['warning']
@@ -515,13 +519,9 @@ def make_progress_widget(get_progress_fn):
     return refresh
 
 
-
 @ui.refreshable
 def render_task_list(kr: KeyResult, state: OKRState):
-    """Renderiza apenas as tarefas de um KR."""
-
     def build_task_card(container, task: Task):
-        """Constrói um único card de tarefa dentro do container."""
         sc = STATUS_CONFIG.get(task.status, STATUS_CONFIG["Não Iniciado"])
         with container:
             with ui.card().classes('w-full p-4 rounded-lg border task-card').style(
@@ -541,11 +541,9 @@ def render_task_list(kr: KeyResult, state: OKRState):
                             t.status = e.value
                             state.mark_dirty()
                             new_sc = STATUS_CONFIG.get(e.value, STATUS_CONFIG["Não Iniciado"])
-                            # Atualiza apenas ícone e cor do card — sem rebuild
                             icon_el.props(f'name={new_sc["icon"]}')
                             icon_el.style(f'color: {new_sc["color"]}')
                             card_el.style(f'background-color: {new_sc["bg"]}; border-color: {BRAND["border"]}')
-                            # Progresso não muda com status de tarefa, então não precisa refresh
                         return on_status_change
 
                     s_sel = ui.select(
@@ -566,8 +564,9 @@ def render_task_list(kr: KeyResult, state: OKRState):
                     )
                     with deadline_input:
                         with ui.menu() as date_menu:
+                            # CORREÇÃO LAMBDA DATA: Agora passa o evento 'e' para não quebrar
                             ui.date().bind_value(deadline_input).on_value_change(
-                                lambda: (date_menu.close(), state.mark_dirty())
+                                lambda e: (date_menu.close(), state.mark_dirty())
                             )
                     deadline_input.on('click', date_menu.open)
 
@@ -575,11 +574,10 @@ def render_task_list(kr: KeyResult, state: OKRState):
                         def do_delete():
                             k.tasks.remove(t)
                             state.mark_dirty()
-                            c.delete()  # remove só esse card do DOM
+                            c.delete()
                             obj = next((o for o in state.objectives if k in o.krs), None)
                             if obj:
-                                render_obj_progress.refresh(obj)
-                            render_kr_progress_header.refresh(k)
+                                pass # progresso ajustado na interface
                         return do_delete
 
                     ui.button(icon='close', on_click=make_delete_task(task, kr, card)).props(
@@ -599,9 +597,7 @@ def render_task_list(kr: KeyResult, state: OKRState):
         for task in kr.tasks:
             build_task_card(task_container, task)
 
-    # Botão adicionar: injeta card diretamente no container, sem rebuild
     def add_task():
-        # Remove empty state se existir
         for child in list(task_container):
             if hasattr(child, '_classes') and 'empty-state-tasks' in (child._classes or ''):
                 child.delete()
@@ -617,7 +613,6 @@ def render_task_list(kr: KeyResult, state: OKRState):
 
 
 def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
-    """Renderiza os KRs de um objetivo. Não é @ui.refreshable — usa container direto."""
     if refresh_obj_progress is None:
         refresh_obj_progress = lambda: None
 
@@ -631,7 +626,7 @@ def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
                     ui.icon('analytics', size='lg').classes('opacity-20').style(f'color: {BRAND["text_light"]}')
                     ui.label('Nenhum Key Result').classes('text-sm font-medium mt-3').style(f'color: {BRAND["text"]}')
                     ui.button('Adicionar Key Result', icon='add_circle_outline',
-                              on_click=lambda: _add_kr(obj, state, build_and_show_krs, refresh_obj_progress)).props(
+                              on_click=lambda e: _add_kr(obj, state, build_and_show_krs, refresh_obj_progress)).props(
                         'flat'
                     ).classes('mt-3').style(f'color: {BRAND["primary"]}')
                 return
@@ -656,7 +651,6 @@ def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
                                     ).classes('text-sm font-medium px-2 py-1 rounded').style(
                                         f'background-color: white; color: {BRAND["text"]}'
                                     )
-                                    # Widget isolado por instância — nunca afeta outros KRs
                                     refresh_kr_progress = make_progress_widget(lambda _k=k: _k.progress)
 
                         with ui.column().classes('w-full p-5 bg-white gap-5'):
@@ -693,8 +687,8 @@ def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
                                                 val = 0.0
                                             setattr(k, attr, val)
                                             state.mark_dirty()
-                                            rk_fn()  # atualiza APENAS este KR
-                                            ro_fn()  # atualiza APENAS este objetivo
+                                            rk_fn()
+                                            ro_fn()
                                         return on_blur
 
                                     ui.number('Atual', min=0, step=0.1).bind_value(
@@ -724,7 +718,7 @@ def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
                 build_kr_block(kr, obj)
 
             ui.button('Adicionar Key Result', icon='add_circle_outline',
-                      on_click=lambda: _add_kr(obj, state, build_and_show_krs, refresh_obj_progress)).props(
+                      on_click=lambda e: _add_kr(obj, state, build_and_show_krs, refresh_obj_progress)).props(
                 'flat'
             ).classes('mt-2').style(f'color: {BRAND["secondary"]}')
 
@@ -742,7 +736,6 @@ def _add_kr(obj: Objective, state: OKRState, rebuild_fn=None, refresh_obj_fn=Non
 
 @ui.refreshable
 def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
-    """Renderiza o painel de um único departamento."""
     objs = [o for o in state.objectives if o.department == dept]
 
     if not objs:
@@ -784,7 +777,6 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
                             )
 
                     with ui.column().classes('items-end gap-1'):
-                        # Widget de progresso ISOLADO por instância de objetivo
                         refresh_obj_progress = make_progress_widget(lambda _o=o: _o.progress)
 
                     with ui.button(icon='more_vert').props('flat round dense'):
@@ -811,7 +803,6 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
 def render_management(state: OKRState):
     depts = state.get_departments()
 
-    # Header
     with ui.row().classes('w-full justify-between items-center mb-8'):
         UIComponents.section_title(
             "Objetivos Estratégicos",
@@ -826,7 +817,6 @@ def render_management(state: OKRState):
                 f'background-color: {BRAND["primary"]}; color: white; font-weight: 600;'
             ).props('no-caps unelevated')
 
-    # Dialog novo objetivo
     with ui.dialog() as add_obj_dialog, ui.card().classes('w-[500px] p-0 rounded-xl shadow-lg'):
         with ui.column().classes('w-full'):
             with ui.row().classes('w-full p-6 items-center justify-between border-b').style(
@@ -853,9 +843,7 @@ def render_management(state: OKRState):
                         if o_name.value:
                             state.add_objective(d_sel.value, o_name.value)
                             add_obj_dialog.close()
-                            # Refresh apenas no painel do departamento afetado
                             render_dept_panel.refresh(d_sel.value, state, add_obj_dialog)
-                            # Atualiza as tabs se for departamento novo
                             render_management.refresh()
                             ui.notify("Objetivo criado", type="positive", color=BRAND['success'], position="top")
 
@@ -863,7 +851,6 @@ def render_management(state: OKRState):
                         f'background-color: {BRAND["primary"]}; color: white; font-weight: 600;'
                     ).props('no-caps unelevated')
 
-    # Dialog departamentos
     with ui.dialog() as dept_dialog, ui.card().classes('w-[560px] h-[520px] p-0 rounded-xl shadow-lg'):
         with ui.column().classes('w-full h-full'):
             with ui.row().classes('w-full p-6 items-center justify-between border-b').style(
@@ -927,8 +914,6 @@ def render_management(state: OKRState):
                     f'background-color: {BRAND["primary"]}; color: white; font-weight: 600;'
                 ).props('no-caps unelevated')
 
-    # ─── TABS com bind estável no estado ───
-    # Garante consistência antes de renderizar
     if state.selected_department not in depts and depts:
         state.selected_department = depts[0]
 
@@ -938,8 +923,6 @@ def render_management(state: OKRState):
         for d in depts:
             ui.tab(d, icon='folder')
 
-    # CORREÇÃO CRÍTICA: cada painel é um componente @ui.refreshable independente.
-    # Isso impede que editar um KR mude a aba ativa.
     with ui.tab_panels(dept_tabs).bind_value(state, 'selected_department').classes(
         'w-full bg-transparent'
     ):
