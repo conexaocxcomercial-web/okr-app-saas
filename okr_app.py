@@ -250,7 +250,6 @@ class OKRState:
         self._df_cache: Optional[pd.DataFrame] = None 
         self.load()
 
-    # CORREÇÃO PRINCIPAL: Permite que eventos de tela chamem a função sem gerar erro no servidor
     def mark_dirty(self, *args, **kwargs):
         self.is_dirty = True
 
@@ -263,16 +262,19 @@ class OKRState:
         if self.selected_department not in depts and depts:
             self.selected_department = depts[0]
 
-    def save(self):
+    # Ajuste: Permite salvamento silencioso pelo cronômetro
+    def save(self, silent=False):
         df = self.to_dataframe()
         if db_manager.sync_data(df, self.user['cliente']):
             self._df_cache = df.copy()
             self.is_dirty  = False
-            ui.notify("Alterações salvas", type="positive", color=BRAND['success'],
-                      icon="check_circle", position="top")
+            if not silent:
+                ui.notify("Alterações salvas", type="positive", color=BRAND['success'],
+                          icon="check_circle", position="top")
         else:
             err = db_manager.init_error or "Erro de conexão"
-            ui.notify(f"Falha ao salvar: {err}", type="negative", position="top")
+            if not silent:
+                ui.notify(f"Falha ao salvar: {err}", type="negative", position="top")
 
     def rename_department(self, old_name: str, new_name: str):
         if not new_name:
@@ -488,7 +490,7 @@ def login_page():
 
 
 # ─────────────────────────────────────────────
-#  COMPONENTES GRANULARES (sem refresh global)
+#  COMPONENTES GRANULARES
 # ─────────────────────────────────────────────
 
 def make_progress_widget(get_progress_fn):
@@ -530,9 +532,10 @@ def render_task_list(kr: KeyResult, state: OKRState):
                 with ui.row().classes('w-full items-center gap-3 flex-wrap'):
                     status_icon = ui.icon(sc["icon"], size='sm').style(f'color: {sc["color"]}')
 
+                    # FIX 1: on_value_change aciona no mesmo milissegundo da digitação
                     ui.input(placeholder='Descrever tarefa...').bind_value(
                         task, 'description'
-                    ).on('blur', state.mark_dirty).classes('flex-grow min-w-40').props(
+                    ).on_value_change(state.mark_dirty).classes('flex-grow min-w-40').props(
                         'borderless dense'
                     ).style(f'color: {BRAND["text"]}; font-weight: 500')
 
@@ -553,18 +556,18 @@ def render_task_list(kr: KeyResult, state: OKRState):
                     ).classes('w-40').props('outlined dense bg-white')
                     s_sel.on_value_change(make_status_handler(task, kr, status_icon, card))
 
+                    # FIX 2: on_value_change para inputs textuais
                     ui.input(placeholder='Responsável', label='Responsável').bind_value(
                         task, 'responsible'
-                    ).on('blur', state.mark_dirty).classes('w-36').props('outlined dense bg-white')
+                    ).on_value_change(state.mark_dirty).classes('w-36').props('outlined dense bg-white')
 
                     deadline_input = ui.input(
                         placeholder='dd/mm/aaaa', label='Prazo'
-                    ).bind_value(task, 'deadline').on('blur', state.mark_dirty).classes('w-36').props(
+                    ).bind_value(task, 'deadline').on_value_change(state.mark_dirty).classes('w-36').props(
                         'outlined dense bg-white'
                     )
                     with deadline_input:
                         with ui.menu() as date_menu:
-                            # CORREÇÃO LAMBDA DATA: Agora passa o evento 'e' para não quebrar
                             ui.date().bind_value(deadline_input).on_value_change(
                                 lambda e: (date_menu.close(), state.mark_dirty())
                             )
@@ -577,7 +580,7 @@ def render_task_list(kr: KeyResult, state: OKRState):
                             c.delete()
                             obj = next((o for o in state.objectives if k in o.krs), None)
                             if obj:
-                                pass # progresso ajustado na interface
+                                pass 
                         return do_delete
 
                     ui.button(icon='close', on_click=make_delete_task(task, kr, card)).props(
@@ -675,33 +678,31 @@ def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
                                     ).style(f'color: {BRAND["error"]}')
 
                                 with ui.row().classes('w-full gap-3 items-start'):
+                                    # FIX 3: Evento instantâneo
                                     ui.input('Nome', placeholder='Ex: Atingir NPS de 80').bind_value(
                                         k, 'name'
-                                    ).on('blur', state.mark_dirty).classes('flex-grow').props('outlined dense bg-white')
+                                    ).on_value_change(state.mark_dirty).classes('flex-grow').props('outlined dense bg-white')
 
-                                    def make_number_handler(k: KeyResult, rk_fn, ro_fn, attr: str):
-                                        def on_blur(e):
+                                    # FIX 4: Evento de número aprimorado e instantâneo
+                                    def make_number_handler(k: KeyResult, attr: str, rk_fn, ro_fn):
+                                        def on_change(e):
                                             try:
-                                                val = float(e.sender.value or 0)
+                                                val = float(e.value if e.value is not None else 0)
                                             except (ValueError, TypeError):
                                                 val = 0.0
                                             setattr(k, attr, val)
                                             state.mark_dirty()
-                                            rk_fn()
-                                            ro_fn()
-                                        return on_blur
+                                            if rk_fn: rk_fn()
+                                            if ro_fn: ro_fn()
+                                        return on_change
 
-                                    ui.number('Atual', min=0, step=0.1).bind_value(
-                                        k, 'current'
-                                    ).on('blur', make_number_handler(k, refresh_kr_progress, refresh_obj_progress, 'current')).classes(
-                                        'w-28'
-                                    ).props('outlined dense bg-white')
+                                    ui.number('Atual', min=0, step=0.1).bind_value(k, 'current').on_value_change(
+                                        make_number_handler(k, 'current', refresh_kr_progress, refresh_obj_progress)
+                                    ).classes('w-28').props('outlined dense bg-white')
 
-                                    ui.number('Meta', min=0, step=0.1).bind_value(
-                                        k, 'target'
-                                    ).on('blur', make_number_handler(k, refresh_kr_progress, refresh_obj_progress, 'target')).classes(
-                                        'w-28'
-                                    ).props('outlined dense bg-white')
+                                    ui.number('Meta', min=0, step=0.1).bind_value(k, 'target').on_value_change(
+                                        make_number_handler(k, 'target', refresh_kr_progress, refresh_obj_progress)
+                                    ).classes('w-28').props('outlined dense bg-white')
 
                             ui.separator()
 
@@ -757,11 +758,10 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
                     with ui.column().classes('flex-grow gap-2'):
                         with ui.row().classes('items-center gap-2 w-full'):
                             ui.icon('flag', size='sm').style(f'color: {BRAND["primary"]}')
-                            ui.textarea().bind_value(o, 'name').on(
-                                'blur', state.mark_dirty
-                            ).classes('text-xl font-bold flex-grow').props(
-                                'borderless dense autogrow rows=1'
-                            ).style(f'color: {BRAND["text"]}; resize: none;')
+                            # FIX 5: Mudança de título instantânea
+                            ui.textarea().bind_value(o, 'name').on_value_change(state.mark_dirty).classes(
+                                'text-xl font-bold flex-grow'
+                            ).props('borderless dense autogrow rows=1').style(f'color: {BRAND["text"]}; resize: none;')
 
                         with ui.row().classes('items-center gap-3 ml-7'):
                             ui.label().bind_text_from(
@@ -884,7 +884,9 @@ def render_management(state: OKRState):
                                             ui.notify("Departamento renomeado", type="positive",
                                                       color=BRAND['success'], position="top")
 
+                                    # FIX 6: Renomear via enter e blur corretamente
                                     d_input.on('blur', lambda e, i=d_input: handle_rename(i.value))
+                                    d_input.on('keydown.enter', lambda e, i=d_input: handle_rename(i.value))
 
                                     def make_delete_dept(dept_name: str):
                                         def do_delete():
@@ -1020,6 +1022,9 @@ def main_page():
 
     state = OKRState(user_info)
 
+    # AUTO-SAVE SILENCIOSO: A cada 30 segundos, salva o progresso na nuvem se houverem alterações
+    ui.timer(30.0, lambda: state.save(silent=True) if state.is_dirty else None)
+
     ui.colors(
         primary=BRAND['primary'], secondary=BRAND['secondary'],
         accent=BRAND['accent'], positive=BRAND['success']
@@ -1114,5 +1119,5 @@ if __name__ in {"__main__", "__mp_main__"}:
         storage_secret=os.getenv("STORAGE_SECRET", "super-secret-key-123"),
         language="pt-BR",
         favicon="🎯",
-        reconnect_timeout=30,   # aguarda reconexão WebSocket por 30s (evita "conexão perdida")
+        reconnect_timeout=30,
     )
