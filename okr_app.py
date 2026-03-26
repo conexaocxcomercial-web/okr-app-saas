@@ -262,15 +262,14 @@ class OKRState:
         if self.selected_department not in depts and depts:
             self.selected_department = depts[0]
 
-    # Ajuste: Permite salvamento silencioso pelo cronômetro
     def save(self, silent=False):
         df = self.to_dataframe()
         if db_manager.sync_data(df, self.user['cliente']):
             self._df_cache = df.copy()
             self.is_dirty  = False
             if not silent:
-                ui.notify("Alterações salvas", type="positive", color=BRAND['success'],
-                          icon="check_circle", position="top")
+                ui.notify("Progresso salvo com sucesso!", type="positive", color=BRAND['success'],
+                          icon="cloud_done", position="top")
         else:
             err = db_manager.init_error or "Erro de conexão"
             if not silent:
@@ -532,7 +531,6 @@ def render_task_list(kr: KeyResult, state: OKRState):
                 with ui.row().classes('w-full items-center gap-3 flex-wrap'):
                     status_icon = ui.icon(sc["icon"], size='sm').style(f'color: {sc["color"]}')
 
-                    # FIX 1: on_value_change aciona no mesmo milissegundo da digitação
                     ui.input(placeholder='Descrever tarefa...').bind_value(
                         task, 'description'
                     ).on_value_change(state.mark_dirty).classes('flex-grow min-w-40').props(
@@ -556,7 +554,6 @@ def render_task_list(kr: KeyResult, state: OKRState):
                     ).classes('w-40').props('outlined dense bg-white')
                     s_sel.on_value_change(make_status_handler(task, kr, status_icon, card))
 
-                    # FIX 2: on_value_change para inputs textuais
                     ui.input(placeholder='Responsável', label='Responsável').bind_value(
                         task, 'responsible'
                     ).on_value_change(state.mark_dirty).classes('w-36').props('outlined dense bg-white')
@@ -678,12 +675,10 @@ def render_kr_list(obj: Objective, state: OKRState, refresh_obj_progress=None):
                                     ).style(f'color: {BRAND["error"]}')
 
                                 with ui.row().classes('w-full gap-3 items-start'):
-                                    # FIX 3: Evento instantâneo
                                     ui.input('Nome', placeholder='Ex: Atingir NPS de 80').bind_value(
                                         k, 'name'
                                     ).on_value_change(state.mark_dirty).classes('flex-grow').props('outlined dense bg-white')
 
-                                    # FIX 4: Evento de número aprimorado e instantâneo
                                     def make_number_handler(k: KeyResult, attr: str, rk_fn, ro_fn):
                                         def on_change(e):
                                             try:
@@ -758,7 +753,6 @@ def render_dept_panel(dept: str, state: OKRState, add_obj_dialog):
                     with ui.column().classes('flex-grow gap-2'):
                         with ui.row().classes('items-center gap-2 w-full'):
                             ui.icon('flag', size='sm').style(f'color: {BRAND["primary"]}')
-                            # FIX 5: Mudança de título instantânea
                             ui.textarea().bind_value(o, 'name').on_value_change(state.mark_dirty).classes(
                                 'text-xl font-bold flex-grow'
                             ).props('borderless dense autogrow rows=1').style(f'color: {BRAND["text"]}; resize: none;')
@@ -884,7 +878,6 @@ def render_management(state: OKRState):
                                             ui.notify("Departamento renomeado", type="positive",
                                                       color=BRAND['success'], position="top")
 
-                                    # FIX 6: Renomear via enter e blur corretamente
                                     d_input.on('blur', lambda e, i=d_input: handle_rename(i.value))
                                     d_input.on('keydown.enter', lambda e, i=d_input: handle_rename(i.value))
 
@@ -1044,11 +1037,27 @@ def main_page():
                 ).style(f'background-color: {BRAND["bg_subtle"]}; color: {BRAND["text"]}')
 
             with ui.row().classes('items-center gap-3'):
-                save_btn = ui.button('Salvar', icon='save', on_click=state.save)
+                
+                # --- UX BLINDADA: Indicador visual e Botão sempre presente ---
+                save_status = ui.label('☁️ Tudo salvo').classes('text-xs font-medium text-slate-400 mr-2 hidden md:block')
+                
+                def update_save_status():
+                    if state.is_dirty:
+                        save_status.set_text('✍️ Alterações pendentes...')
+                        save_status.classes(replace='text-xs font-medium text-amber-500 mr-2 hidden md:block')
+                    else:
+                        save_status.set_text('☁️ Tudo salvo')
+                        save_status.classes(replace='text-xs font-medium text-emerald-500 mr-2 hidden md:block')
+                
+                # Checa a cada 1 segundo se algo mudou para atualizar o texto (sem esconder o botão)
+                ui.timer(1.0, update_save_status)
+
+                save_btn = ui.button('Salvar', icon='save', on_click=lambda: state.save(silent=False))
                 save_btn.style(
                     f'background-color: {BRAND["success"]}; color: white; font-weight: 600;'
                 ).props('no-caps unelevated')
-                save_btn.bind_visibility_from(state, 'is_dirty')
+                # O BOTÃO NÃO SOME MAIS! A linha do bind_visibility_from foi deletada.
+                # -------------------------------------------------------------
 
                 with ui.avatar(size='36px').style(
                     f'background-color: {BRAND["primary"]}; color: white; font-weight: 600;'
@@ -1119,5 +1128,5 @@ if __name__ in {"__main__", "__mp_main__"}:
         storage_secret=os.getenv("STORAGE_SECRET", "super-secret-key-123"),
         language="pt-BR",
         favicon="🎯",
-        reconnect_timeout=30,
+        reconnect_timeout=30,   # aguarda reconexão WebSocket por 30s (evita "conexão perdida")
     )
